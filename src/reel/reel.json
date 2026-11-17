@@ -1,0 +1,37 @@
+{
+  "segmentSeconds": 10,
+  "fadeSeconds": 1,
+  "duration": 51,
+  "films": [
+    {
+      "title": "Charade",
+      "year": 1963,
+      "credit": "Public domain",
+      "at": 0
+    },
+    {
+      "title": "Tears of Steel",
+      "year": 2012,
+      "credit": "© Blender Foundation · CC BY 3.0",
+      "at": 10
+    },
+    {
+      "title": "His Girl Friday",
+      "year": 1940,
+      "credit": "Public domain",
+      "at": 20
+    },
+    {
+      "title": "Night of the Living Dead",
+      "year": 1968,
+      "credit": "Public domain",
+      "at": 30
+    },
+    {
+      "title": "Detour",
+      "year": 1945,
+      "credit": "Public domain",
+      "at": 40
+    }
+  ]
+}

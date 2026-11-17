@@ -29,6 +29,45 @@ html::-webkit-scrollbar {
   display: none;
 }
 
+/* Layer 0: YouTube trailers placed on the screen in CSS 3D. Layer 1: the WebGL room, see-through over the screen. */
+.screen-layer {
+  position: fixed !important;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.screen-frame {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+
+.screen-frame,
+.screen-frame * {
+  pointer-events: none !important;
+}
+
+/* Two stacked players; the incoming one fades in on top of the outgoing one. */
+.trailer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 1s cubic-bezier(0.45, 0, 0.25, 1);
+}
+
+.trailer.is-live {
+  opacity: 1;
+}
+
+.trailer iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
 #scene {
   position: fixed;
   inset: 0;

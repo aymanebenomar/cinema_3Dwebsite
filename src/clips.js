@@ -1,83 +1,52 @@
 /**
- * Tonight's programme: real films, CLIP_SECONDS each, crossfading from one to the next.
+ * What plays on the cinema screen.
  *
- * YOUR OWN CLIPS — drop video files (.mp4, .webm, .mov, .m4v) into `src/clips/`.
- * They're picked up automatically, play first, and are titled from the file name:
- * `the-batman.mp4` shows as "The Batman", `la_la_land.mp4` as "La La Land".
- * Only use footage you have the rights to show.
+ * Normally that's the REEL: one pre-built video with 10 seconds of every film, crossfaded. Build it with
+ * `npm run reel` — to add your own films, see reel/sources/README.md. Being a local file, it starts
+ * instantly and never buffers.
  *
- * After your clips come free films you're allowed to show anywhere: public-domain Hollywood
- * classics plus the open-licensed "Tears of Steel", streamed from Wikimedia Commons.
+ * Without a reel, the site can stream the free films in reel/films.json live from Wikimedia Commons
+ * instead (set STREAM_WITHOUT_REEL to true). It's off by default: live streaming is slow to start and
+ * Wikimedia rate-limits it.
  *
- * Fields:
- * - `src`    video URL (mp4 or webm). Remote files must allow cross-origin use (CORS).
- * - `start`  second to start the excerpt at. Leave it out to pick a random scene each time.
- * - `credit` small print under the title.
- *
- * Start at a specific clip with `?clip=2` in the URL (0-based).
+ * Add `?clip=2` to the URL to start at the third film (0-based).
  */
+import films from '../reel/films.json';
+
 export const CLIP_SECONDS = 10;
 
-/** Set to false to show only your own clips once you've added some. */
-const INCLUDE_FREE_FILMS = true;
+const STREAM_WITHOUT_REEL = false;
 
-const localFiles = import.meta.glob('./clips/*.{mp4,webm,mov,m4v,MP4,WEBM,MOV,M4V}', {
-  query: '?url',
-  import: 'default',
-  eager: true,
-});
+const reelVideo = Object.values(import.meta.glob('./reel/reel.mp4', { query: '?url', import: 'default', eager: true }))[0];
+const reelInfo = Object.values(import.meta.glob('./reel/reel.json', { import: 'default', eager: true }))[0];
 
-const SMALL_WORDS = new Set(['a', 'an', 'and', 'of', 'the', 'in', 'on', 'at', 'to', 'vs']);
-function titleFromFile(path) {
-  const words = path
-    .split('/')
-    .pop()
-    .replace(/\.[^.]+$/, '')
-    .replace(/[-_.]+/g, ' ')
-    .trim()
-    .split(/\s+/);
-  return words
-    .map((w, i) => (i > 0 && SMALL_WORDS.has(w.toLowerCase()) ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1)))
-    .join(' ');
-}
+/** The pre-built reel, or null. Shape: { src, segmentSeconds, fadeSeconds, duration, films: [{ title, year, credit, at }] } */
+export const REEL = reelVideo && reelInfo ? { src: reelVideo, ...reelInfo } : null;
 
-const YOUR_CLIPS = Object.entries(localFiles)
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([path, src]) => ({ title: titleFromFile(path), src }));
-
-const COMMONS = 'https://upload.wikimedia.org/wikipedia/commons/transcoded';
-
-const FREE_FILMS = [
-  {
-    title: 'Charade',
-    year: 1963,
-    credit: 'Public domain',
-    src: `${COMMONS}/e/ef/Charade_%28Stanley_Donen%2C_1963%29.webm/Charade_%28Stanley_Donen%2C_1963%29.webm.1080p.vp9.webm`,
-  },
-  {
-    title: 'Tears of Steel',
-    year: 2012,
-    credit: '© Blender Foundation · CC BY 3.0',
-    src: `${COMMONS}/c/cb/Tears_of_Steel_1080p.webm/Tears_of_Steel_1080p.webm.1080p.vp9.webm`,
-  },
-  {
-    title: 'His Girl Friday',
-    year: 1940,
-    credit: 'Public domain',
-    src: `${COMMONS}/d/df/His_Girl_Friday_%281940%29_by_Howard_Hawks.webm/His_Girl_Friday_%281940%29_by_Howard_Hawks.webm.1080p.vp9.webm`,
-  },
-  {
-    title: 'Night of the Living Dead',
-    year: 1968,
-    credit: 'Public domain',
-    src: `${COMMONS}/2/24/Night_of_the_Living_Dead_%281968%29.webm/Night_of_the_Living_Dead_%281968%29.webm.1080p.vp9.webm`,
-  },
-  {
-    title: 'Detour',
-    year: 1945,
-    credit: 'Public domain',
-    src: `${COMMONS}/b/b7/Detour_%281945%29_by_Edgar_G._Ulmer.webm/Detour_%281945%29_by_Edgar_G._Ulmer.webm.1080p.vp9.webm`,
-  },
+/**
+ * Studio films, shown as their OFFICIAL TRAILERS through YouTube's own embedded player — the legal way
+ * to show this footage without owning it. They play first, 10 seconds each, then the reel.
+ * - `youtube` video id (the part after `watch?v=`)
+ * - `start`   second of the trailer to show
+ * - `light`   colour the screen throws onto the room
+ * Empty this list to play only the reel.
+ */
+export const TRAILERS = [
+  { title: 'The Batman', year: 2022, credit: 'Warner Bros. Pictures', youtube: 'mqqft2x_Aa4', start: 106, light: '#ff4436' },
+  { title: 'Spider-Man: No Way Home', year: 2021, credit: 'Sony Pictures · Marvel Studios', youtube: 'JfVOs4VSpmA', start: 98, light: '#6b8dff' },
+  { title: 'La La Land', year: 2016, credit: 'Lionsgate', youtube: '0pdqf4P9MB8', start: 84, light: '#8c6dff' },
+  { title: 'Interstellar', year: 2014, credit: 'Paramount Pictures · Warner Bros.', youtube: 'zSWdZVtXT7E', start: 64, light: '#d4e6ff' },
+  { title: 'Top Gun: Maverick', year: 2022, credit: 'Paramount Pictures', youtube: 'giXco2jaZ_4', start: 58, light: '#ffbe73' },
+  { title: 'Titanic', year: 1997, credit: 'Paramount Pictures · 20th Century', youtube: '2e-eXJ6HgkQ', start: 60, light: '#5ea6ff' },
+  { title: 'Avengers: Endgame', year: 2019, credit: 'Marvel Studios', youtube: 'TcMBFSGVi1c', start: 70, light: '#b48cff' },
+  { title: 'The Notebook', year: 2004, credit: 'New Line Cinema', youtube: 'BjJcYdEOI0k', start: 70, light: '#ffcf96' },
+  { title: 'Dune', year: 2021, credit: 'Warner Bros. Pictures · Legendary', youtube: '8g18jFHCLXk', start: 95, light: '#ffb25c' },
+  { title: 'Joker', year: 2019, credit: 'Warner Bros. Pictures', youtube: 'zAGVQLHvwOY', start: 70, light: '#ffa84c' },
+  { title: 'The Dark Knight', year: 2008, credit: 'Warner Bros. Pictures', youtube: 'EXeTwQWrcwY', start: 60, light: '#6c8cff' },
+  { title: 'Oppenheimer', year: 2023, credit: 'Universal Pictures', youtube: 'uYPbbksJxIg', start: 65, light: '#ff8a3d' },
 ];
 
-export const CLIPS = [...YOUR_CLIPS, ...(INCLUDE_FREE_FILMS || YOUR_CLIPS.length === 0 ? FREE_FILMS : [])];
+/** Streaming fallback: the free films, played live (only when enabled above). */
+export const CLIPS = (STREAM_WITHOUT_REEL ? films : [])
+  .filter((f) => /^https?:/.test(f.src))
+  .map(({ title, year, credit, src, start }) => ({ title, year, credit, src, start }));

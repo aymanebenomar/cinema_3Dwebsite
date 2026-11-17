@@ -1,7 +1,10 @@
 import './style.css';
 import * as THREE from 'three';
+import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { createCinema, SCREEN, BALCONY_EYE, BALCONY_LOOK } from './cinema.js';
 import { createProjector } from './projector.js';
+import { TRAILERS } from './clips.js';
+import { createTrailers, FRAME } from './trailers.js';
 
 /* ---------- Tunables ---------- */
 
@@ -16,8 +19,10 @@ const CRANE_HEIGHT = 0.9; // extra lift mid-move, in metres, for a floaty crane 
 
 const canvas = document.getElementById('scene');
 let pixelRatio = Math.min(window.devicePixelRatio, 2);
+const MIN_PIXEL_RATIO = Math.min(1.5, pixelRatio); // never drop below this, even on a slow GPU
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+// The canvas is transparent wherever the screen shows a YouTube trailer (it sits behind the canvas).
+const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.setClearColor(0x000000, 1);
@@ -30,6 +35,22 @@ renderer.shadowMap.needsUpdate = true;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(START_FOV, innerWidth / innerHeight, 0.05, 120);
+
+// Trailers are YouTube players, placed exactly on the 3D screen with CSS 3D, using the same camera.
+const cssRenderer = new CSS3DRenderer();
+cssRenderer.setSize(innerWidth, innerHeight);
+cssRenderer.domElement.className = 'screen-layer';
+document.body.insertBefore(cssRenderer.domElement, canvas);
+const cssScene = new THREE.Scene();
+const frameEl = document.createElement('div');
+frameEl.className = 'screen-frame';
+frameEl.style.width = `${FRAME.width}px`;
+frameEl.style.height = `${FRAME.height}px`;
+const screenObject = new CSS3DObject(frameEl);
+frameEl.style.pointerEvents = 'none'; // the player must never react to the mouse
+screenObject.position.set(0, SCREEN.centerY, SCREEN.z);
+screenObject.scale.setScalar((SCREEN.width / FRAME.width) * 1.004); // a hair larger: no seam at the edges
+cssScene.add(screenObject);
 
 /* ---------- Cinema + projector ---------- */
 
@@ -48,6 +69,7 @@ const ui = {
 const startClip = Number.parseInt(new URLSearchParams(location.search).get('clip') ?? '0', 10) || 0;
 const projector = createProjector({
   screenAspect: SCREEN.aspect,
+  anisotropy: renderer.capabilities.getMaxAnisotropy(),
   startIndex: startClip,
   onClip: (clip) => showTitle(clip),
   onPlaying: () => {
@@ -58,12 +80,54 @@ const projector = createProjector({
     ui.loading.classList.add('is-done');
     ui.play.hidden = false;
   },
-  onFail: () => {
-    ui.loading.textContent = 'Films unavailable — check your connection';
+  onFail: (reason) => {
+    ui.loading.textContent = reason === 'no-reel' ? 'No reel yet — run npm run reel' : 'Films unavailable — check your connection';
   },
 });
 const cinema = createCinema(scene, projector.material);
+
+// The programme: the reel plays continuously, and the studio trailers (YouTube) cut in over it as soon as
+// they're ready — at start-up, then each time the reel comes round to its end. The screen is never black.
+let trailersWork = TRAILERS.length > 0;
+let trailersQueued = false;
+let trailerFailures = 0;
+const trailers = trailersWork
+  ? createTrailers(frameEl, TRAILERS, {
+      onShow: (trailer, index) => {
+        trailerFailures = 0;
+        ui.loading.classList.add('is-done');
+        if (index === 0) {
+          projector.setVisible(0); // the screen becomes a window onto the trailer
+          setTimeout(() => projector.pauseReel(), 1300);
+        }
+        projector.setGlow(trailer.light);
+        showTitle(trailer);
+      },
+      onDone: () => backToReel(),
+      onFail: () => {
+        // Try again next time the reel comes round; after three misses in a row, YouTube is clearly blocked here.
+        if (++trailerFailures >= 3) trailersWork = false;
+        backToReel();
+      },
+    })
+  : null;
+
+function queueTrailers(at = 0) {
+  if (!trailersWork || trailersQueued) return;
+  trailersQueued = true;
+  trailers.play({ at });
+}
+
+function backToReel() {
+  trailersQueued = false;
+  projector.setGlow(null);
+  projector.setVisible(1);
+  projector.playReel();
+  trailers?.stop();
+}
+
 projector.start();
+queueTrailers();
 
 ui.play.addEventListener('click', () => {
   ui.play.hidden = true;
@@ -74,6 +138,7 @@ let muted = true;
 ui.sound.addEventListener('click', () => {
   muted = !muted;
   projector.setMuted(muted);
+  trailers?.setMuted(muted);
   ui.sound.setAttribute('aria-pressed', String(!muted));
   ui.soundLabel.textContent = muted ? 'Sound off' : 'Sound on';
 });
@@ -113,6 +178,7 @@ document.documentElement.addEventListener('mouseleave', () => pointerTarget.set(
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   renderer.setSize(innerWidth, innerHeight, false);
+  cssRenderer.setSize(innerWidth, innerHeight);
   readScroll();
 });
 
@@ -191,12 +257,18 @@ renderer.setAnimationLoop((now) => {
   camera.lookAt(lookAt);
 
   projector.update(dt);
+  // Line the trailers up to cut in exactly where the reel comes round to its end.
+  if (trailersWork && !trailersQueued) {
+    const left = projector.reelTimeLeft();
+    if (left !== null && left < 8) queueTrailers(performance.now() + left * 1000);
+  }
   cinema.update({ glow: projector.glow });
 
   ui.hint.style.opacity = String(1 - smoothstep(0, 0.06, p));
   ui.vignette.style.opacity = String(e);
 
   renderer.render(scene, camera);
+  cssRenderer.render(cssScene, camera);
 
   // Keep it fluid on slower GPUs: if frames run long, render at a lower resolution.
   perfGrace -= dt;
@@ -204,8 +276,8 @@ renderer.setAnimationLoop((now) => {
     perfTime += dt;
     perfFrames++;
     if (perfTime > 2) {
-      if (perfTime / perfFrames > 1 / 45 && pixelRatio > 1) {
-        pixelRatio = Math.max(1, pixelRatio - 0.25);
+      if (perfTime / perfFrames > 1 / 38 && pixelRatio > MIN_PIXEL_RATIO) {
+        pixelRatio = Math.max(MIN_PIXEL_RATIO, pixelRatio - 0.25);
         renderer.setPixelRatio(pixelRatio);
         renderer.setSize(innerWidth, innerHeight, false);
       }

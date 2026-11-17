@@ -2,3 +2,8 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Reel builder: downloaded/rendered pieces, and your own source films (large, and possibly not yours to share)
+reel/.cache/
+reel/sources/*
+!reel/sources/README.md

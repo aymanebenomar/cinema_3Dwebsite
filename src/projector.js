@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CLIPS, CLIP_SECONDS } from './clips.js';
+import { CLIPS, CLIP_SECONDS, REEL } from './clips.js';
 
 const FADE_SECONDS = 1.4; // crossfade between clips
 const PRELOAD_SECONDS = 4; // start preparing the next clip this long before the cut
@@ -11,7 +11,17 @@ const MAX_COVER_CROP = 0.25; // crop at most this much of a picture to fill the 
  * next clip; at the cut it starts playing and the screen shader crossfades between them, so there is
  * never a black gap or a loading spinner.
  */
-export function createProjector({ screenAspect, startIndex = 0, onClip, onPlaying, onBlocked, onFail } = {}) {
+export function createProjector({
+  screenAspect,
+  startIndex = 0,
+  holdReel = false, // wait for playReel() before starting the reel
+  anisotropy = 1, // texture sharpness at grazing angles (renderer.capabilities.getMaxAnisotropy())
+  onClip,
+  onPlaying,
+  onBlocked,
+  onFail,
+  onReelEnded,
+} = {}) {
   const decks = [0, 1].map(createDeck);
   let live = null; // deck on screen
   let incoming = null; // deck being prepared
@@ -19,9 +29,20 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
   let failures = 0;
   let cursor = -1; // last programme index handed to a deck
   let starting = false; // first clip is being started
-  const nextIndex = () => (cursor = (cursor + 1) % CLIPS.length);
+  // With a pre-built reel, the programme is a single looping video and films are tracked by time.
+  let programme = REEL
+    ? [{ src: REEL.src, reel: true, start: (Math.max(0, startIndex) % REEL.films.length) * REEL.segmentSeconds }]
+    : CLIPS;
+  const reelMode = () => Boolean(programme[0]?.reel);
+  let reelFilm = -1;
+  const nextIndex = () => (cursor = (cursor + 1) % programme.length);
   let mix = 0; // 0 = deck 0 visible, 1 = deck 1 visible
   let brightness = 0; // fades the very first clip in from black
+  let hold = holdReel;
+  let opacity = holdReel ? 0 : 1; // 0 = the screen is a window onto the trailer layer behind the canvas
+  let opacityTarget = opacity;
+  let glowOverride = null;
+  const overrideColor = new THREE.Color();
 
   const uniforms = {
     uTex0: { value: null },
@@ -30,6 +51,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     uFit1: { value: new THREE.Vector2(1, 1) },
     uMix: { value: 0 },
     uBrightness: { value: 0 },
+    uOpacity: { value: opacity },
   };
   const material = new THREE.ShaderMaterial({
     uniforms,
@@ -46,6 +68,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
       uniform vec2 uFit1;
       uniform float uMix;
       uniform float uBrightness;
+      uniform float uOpacity;
       varying vec2 vUv;
 
       vec3 deck(sampler2D tex, vec2 fit) {
@@ -59,7 +82,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
         vec3 c = vec3(0.0);
         if (m < 0.999) c += deck(uTex0, uFit0) * (1.0 - m);
         if (m > 0.001) c += deck(uTex1, uFit1) * m;
-        gl_FragColor = vec4(c * uBrightness, 1.0);
+        gl_FragColor = vec4(c * uBrightness * uOpacity, uOpacity);
         #include <colorspace_fragment>
       }`,
     toneMapped: false,
@@ -91,7 +114,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     video.addEventListener('loadedmetadata', () => {
       if (deck.state !== 'loading') return;
       deck.state = 'seeking';
-      video.currentTime = pickStart(CLIPS[deck.index], video.duration);
+      video.currentTime = pickStart(programme[deck.index], video.duration);
     });
     video.addEventListener('seeked', () => {
       if (deck.state !== 'seeking') return;
@@ -100,6 +123,9 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     });
     video.addEventListener('canplay', () => checkReady(deck));
     video.addEventListener('canplaythrough', () => checkReady(deck));
+    video.addEventListener('ended', () => {
+      if (deck === live && reelMode()) onReelEnded?.();
+    });
     video.addEventListener('error', () => {
       if (deck.state !== 'idle' && deck.state !== 'live') fail(deck);
     });
@@ -120,29 +146,32 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     deck.tries = 0;
     deck.video.pause();
     deck.video.muted = true;
-    deck.video.src = CLIPS[index].src;
+    deck.video.loop = Boolean(programme[index].reel);
+    deck.video.src = programme[index].src;
     deck.video.load();
   }
 
   function checkReady(deck) {
     if (deck.state !== 'buffering' || deck.video.readyState < 3) return;
     // Random scenes sometimes land on a black frame or a fade; try another spot.
-    if (typeof CLIPS[deck.index].start !== 'number' && deck.tries < 3 && frameLuminance(deck.video) < 0.035) {
+    if (typeof programme[deck.index].start !== 'number' && deck.tries < 3 && frameLuminance(deck.video) < 0.035) {
       deck.tries++;
       deck.state = 'seeking';
-      deck.video.currentTime = pickStart(CLIPS[deck.index], deck.video.duration);
+      deck.video.currentTime = pickStart(programme[deck.index], deck.video.duration);
       return;
     }
     deck.state = 'ready';
     deck.texture?.dispose();
     deck.texture = new THREE.VideoTexture(deck.video);
     deck.texture.colorSpace = THREE.SRGBColorSpace;
-    deck.texture.minFilter = THREE.LinearFilter;
+    // Mipmaps + anisotropic filtering keep the picture crisp, without shimmer, when the screen is small.
+    deck.texture.minFilter = THREE.LinearMipmapLinearFilter;
     deck.texture.magFilter = THREE.LinearFilter;
-    deck.texture.generateMipmaps = false;
+    deck.texture.generateMipmaps = true;
+    deck.texture.anisotropy = anisotropy;
     uniforms[`uTex${deck.slot}`].value = deck.texture;
     uniforms[`uFit${deck.slot}`].value.copy(fitFor(deck.video.videoWidth / deck.video.videoHeight));
-    if (!live && !starting) cut(deck);
+    if (!live && !starting && !hold) cut(deck);
   }
 
   /**
@@ -160,9 +189,15 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
   }
 
   function fail(deck) {
-    console.warn(`[cinema] Skipping "${CLIPS[deck.index]?.title}" — it couldn't be loaded.`);
     deck.state = 'idle';
-    if (++failures >= CLIPS.length * 2) {
+    if (programme[deck.index]?.reel) {
+      console.warn('[cinema] The reel could not be loaded — streaming the films instead.');
+      programme = CLIPS;
+      start();
+      return;
+    }
+    console.warn(`[cinema] Skipping "${programme[deck.index]?.title}" — it couldn't be loaded.`);
+    if (++failures >= programme.length * 2) {
       onFail?.();
       return;
     }
@@ -187,7 +222,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
         deck.state = 'live';
         deck.liveSince = deck.video.currentTime;
         if (previous) previous.state = 'outgoing';
-        onClip?.(CLIPS[deck.index], deck.index);
+        if (!reelMode()) onClip?.(programme[deck.index], deck.index);
         onPlaying?.();
       })
       .catch((err) => {
@@ -224,7 +259,15 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
   function update(dt) {
     const now = performance.now();
 
-    if (live) {
+    if (live && reelMode() && opacityTarget > 0) {
+      // The reel carries its own crossfades; just keep the "Now showing" title in step with it.
+      const k = Math.floor((live.video.currentTime - REEL.fadeSeconds / 2) / REEL.segmentSeconds);
+      const film = Math.max(0, Math.min(REEL.films.length - 1, k));
+      if (film !== reelFilm) {
+        reelFilm = film;
+        onClip?.(REEL.films[film], film);
+      }
+    } else if (live) {
       const elapsed = live.video.currentTime - live.liveSince;
       if (!incoming && elapsed >= CLIP_SECONDS - PRELOAD_SECONDS) {
         incoming = decks.find((d) => d !== live);
@@ -256,6 +299,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
         outgoing.state = 'idle';
       }
       sampleIn -= dt;
+      if (glowOverride) sampleIn = 1; // lit by the trailer's colour instead (see below)
       if (sampleIn <= 0 && live.video.readyState >= 2) {
         sampleIn = 0.1;
         sampleFrame(live.video);
@@ -263,14 +307,26 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     }
     uniforms.uMix.value = mix;
     uniforms.uBrightness.value = brightness * brightness * (3 - 2 * brightness);
+    opacity += Math.sign(opacityTarget - opacity) * Math.min(Math.abs(opacityTarget - opacity), dt / 1.1);
+    uniforms.uOpacity.value = opacity * opacity * (3 - 2 * opacity);
+    if (glowOverride) {
+      // YouTube doesn't let pages read its pixels, so the room glows in the film's colour, flickering gently.
+      const t = performance.now() / 1000;
+      const flicker = 0.5 + 0.25 * Math.sin(t * 1.3) + 0.15 * Math.sin(t * 2.7 + 1.1) + 0.1 * Math.sin(t * 6.1 + 0.4);
+      sampled.copy(glowOverride).multiplyScalar(0.14 + 0.12 * flicker);
+    }
     glow.lerp(sampled, 1 - Math.exp(-dt * 5));
   }
 
   function start() {
-    const n = CLIPS.length;
-    cursor = (((startIndex - 1) % n) + n) % n;
+    const n = programme.length;
+    if (!n) {
+      onFail?.('no-reel');
+      return;
+    }
+    cursor = reelMode() ? -1 : (((startIndex - 1) % n) + n) % n;
     load(decks[0], nextIndex());
-    load(decks[1], nextIndex()); // whichever is ready first plays first
+    if (!reelMode()) load(decks[1], nextIndex()); // whichever is ready first plays first
   }
 
   function setMuted(value) {
@@ -285,5 +341,37 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     if (deck) cut(deck);
   }
 
-  return { material, glow, start, update, setMuted, resume };
+  /** 1 shows the projected picture; 0 turns the screen into a window onto the trailer layer. */
+  function setVisible(value) {
+    opacityTarget = value;
+  }
+
+  /** Start the reel, or resume it where it was paused. */
+  function playReel() {
+    hold = false;
+    reelFilm = -1;
+    if (live && reelMode()) {
+      live.video.play().catch(() => {});
+      return;
+    }
+    const ready = decks.find((d) => d.state === 'ready');
+    if (ready && !starting) cut(ready);
+  }
+
+  /** Light the room in this colour instead of from the picture (null to go back). */
+  function setGlow(hex) {
+    glowOverride = hex ? overrideColor.set(hex) : null;
+  }
+
+  function pauseReel() {
+    if (live && reelMode()) live.video.pause();
+  }
+
+  /** Seconds until the playing reel comes round to its end, or null if no reel is playing. */
+  function reelTimeLeft() {
+    if (!live || !reelMode() || live.video.paused || !Number.isFinite(live.video.duration)) return null;
+    return live.video.duration - live.video.currentTime;
+  }
+
+  return { material, glow, start, update, setMuted, resume, setVisible, playReel, pauseReel, reelTimeLeft, setGlow };
 }
