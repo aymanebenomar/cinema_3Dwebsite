@@ -32,10 +32,21 @@ html::-webkit-scrollbar {
 #scene {
   position: fixed;
   inset: 0;
+  z-index: 1;
   width: 100%;
   height: 100%;
   display: block;
   outline: none;
+  pointer-events: none;
+}
+
+.vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse 75% 70% at 50% 46%, transparent 55%, rgba(0, 0, 0, 0.55) 85%, rgba(0, 0, 0, 0.85) 100%);
 }
 
 .scroll-space {
@@ -43,6 +54,47 @@ html::-webkit-scrollbar {
 }
 
 /* ---------- Overlay UI ---------- */
+
+.hint,
+.sound,
+.play,
+.loading,
+.now-showing {
+  z-index: 3;
+}
+
+.now-showing {
+  position: fixed;
+  left: max(22px, env(safe-area-inset-left));
+  top: max(22px, env(safe-area-inset-top));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(70vw, 420px);
+  pointer-events: none;
+  text-shadow: 0 1px 14px rgba(0, 0, 0, 0.8);
+  transition: opacity 0.38s ease, transform 0.38s ease;
+}
+
+.now-showing.is-swapping {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.now-label,
+.now-note {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.now-title {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: clamp(18px, 2.2vw, 26px);
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+}
 
 .hint {
   position: fixed;

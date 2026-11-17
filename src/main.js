@@ -1,37 +1,33 @@
 import './style.css';
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { createFilm } from './film.js';
-import { createCinema, seatEye, SCREEN_Z } from './cinema.js';
+import { createCinema, SCREEN, BALCONY_EYE, BALCONY_LOOK } from './cinema.js';
+import { createProjector } from './projector.js';
 
 /* ---------- Tunables ---------- */
 
 const START_FOV = 50; // camera lens while the film is fullscreen
-const SEAT_FOV = 52; // camera lens once you're sitting down
-const MIN_SEAT_HFOV = 60; // on narrow (phone) screens, widen the lens so the whole screen still fits
-const SEAT_LOOK_DROP = 1.8; // how far below the screen centre you look when seated (shows the rows in front)
-const SEAT = seatEye(6); // which row you end up in (0 = front)
-const SCROLL_DAMPING = 3.5; // higher = camera follows the scroll more tightly
-const CRANE_HEIGHT = 0.7; // how much the camera lifts mid-move, in metres
+const SEAT_FOV = 53; // camera lens once you're up in the balcony
+const MIN_SEAT_HFOV = 64; // on narrow (phone) screens, widen the lens so the whole screen still fits
+const SCROLL_SMOOTH = 0.55; // seconds the camera takes to catch up with the scroll (spring)
+const LOOK_SMOOTH = 0.7; // same, for mouse look
+const CRANE_HEIGHT = 0.9; // extra lift mid-move, in metres, for a floaty crane shot
 
-/* ---------- Renderer ---------- */
+/* ---------- Renderers ---------- */
 
 const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, powerPreference: 'high-performance' });
-const pixelRatio = Math.min(window.devicePixelRatio, 2);
+let pixelRatio = Math.min(window.devicePixelRatio, 2);
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight, false);
-renderer.toneMapping = THREE.NoToneMapping; // keep the film's colours exactly as shot
+renderer.setClearColor(0x000000, 1);
+renderer.toneMapping = THREE.NoToneMapping;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#000000');
-const camera = new THREE.PerspectiveCamera(START_FOV, innerWidth / innerHeight, 0.05, 80);
+const camera = new THREE.PerspectiveCamera(START_FOV, innerWidth / innerHeight, 0.05, 90);
 
-/* ---------- Film + cinema ---------- */
+/* ---------- Cinema + projector ---------- */
+
 
 const ui = {
   loading: document.getElementById('loading'),
@@ -39,11 +35,17 @@ const ui = {
   hint: document.getElementById('hint'),
   sound: document.getElementById('sound'),
   soundLabel: document.getElementById('sound-label'),
+  now: document.getElementById('now-showing'),
+  nowTitle: document.getElementById('now-title'),
+  nowNote: document.getElementById('now-note'),
+  vignette: document.getElementById('vignette'),
 };
 
-const film = createFilm({
-  onTexture: (texture) => cinema.setFilmTexture(texture),
-  onAspect: (aspect) => cinema.setScreenAspect(aspect),
+const startClip = Number.parseInt(new URLSearchParams(location.search).get('clip') ?? '0', 10) || 0;
+const projector = createProjector({
+  screenAspect: SCREEN.aspect,
+  startIndex: startClip,
+  onClip: (clip) => showTitle(clip),
   onPlaying: () => {
     ui.loading.classList.add('is-done');
     ui.play.hidden = true;
@@ -52,56 +54,36 @@ const film = createFilm({
     ui.loading.classList.add('is-done');
     ui.play.hidden = false;
   },
+  onFail: () => {
+    ui.loading.textContent = 'Films unavailable — check your connection';
+  },
 });
-const cinema = createCinema(scene, film.texture);
-film.start();
+const cinema = createCinema(scene, projector.material);
+projector.start();
 
 ui.play.addEventListener('click', () => {
   ui.play.hidden = true;
-  film.play();
+  projector.resume();
 });
 
+let muted = true;
 ui.sound.addEventListener('click', () => {
-  const turnOn = film.video.muted;
-  film.setMuted(!turnOn);
-  ui.sound.setAttribute('aria-pressed', String(turnOn));
-  ui.soundLabel.textContent = turnOn ? 'Sound on' : 'Sound off';
+  muted = !muted;
+  projector.setMuted(muted);
+  ui.sound.setAttribute('aria-pressed', String(!muted));
+  ui.soundLabel.textContent = muted ? 'Sound off' : 'Sound on';
 });
 
-/* ---------- Post-processing ---------- */
-
-const VignetteShader = {
-  uniforms: { tDiffuse: { value: null }, uStrength: { value: 0 } },
-  vertexShader: /* glsl */ `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }`,
-  fragmentShader: /* glsl */ `
-    uniform sampler2D tDiffuse;
-    uniform float uStrength;
-    varying vec2 vUv;
-    void main() {
-      vec4 c = texture2D(tDiffuse, vUv);
-      vec2 d = (vUv - 0.5) * vec2(1.0, 1.2);
-      c.rgb *= mix(1.0, smoothstep(0.85, 0.15, length(d)), uStrength);
-      gl_FragColor = c;
-    }`,
-};
-
-const composer = new EffectComposer(
-  renderer,
-  new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
-);
-composer.setPixelRatio(pixelRatio);
-composer.setSize(innerWidth, innerHeight);
-composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0, 0.7, 0.82);
-composer.addPass(bloom);
-const vignette = new ShaderPass(VignetteShader);
-composer.addPass(vignette);
-composer.addPass(new OutputPass());
+let titleTimer = 0;
+function showTitle(clip) {
+  ui.now.classList.add('is-swapping');
+  clearTimeout(titleTimer);
+  titleTimer = setTimeout(() => {
+    ui.nowTitle.textContent = clip.year ? `${clip.title} (${clip.year})` : clip.title;
+    ui.nowNote.textContent = clip.credit ?? '';
+    ui.now.classList.remove('is-swapping');
+  }, 380);
+}
 
 /* ---------- Scroll + pointer ---------- */
 
@@ -110,7 +92,6 @@ if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 window.scrollTo(0, 0);
 
 let scrollTarget = 0;
-let progress = 0; // 0 = fullscreen film, 1 = sitting in the cinema
 function readScroll() {
   const max = document.documentElement.scrollHeight - innerHeight;
   scrollTarget = max > 0 ? THREE.MathUtils.clamp(window.scrollY / max, 0, 1) : 0;
@@ -118,7 +99,6 @@ function readScroll() {
 addEventListener('scroll', readScroll, { passive: true });
 readScroll();
 
-const pointer = new THREE.Vector2();
 const pointerTarget = new THREE.Vector2();
 addEventListener('pointermove', (e) => {
   if (e.pointerType !== 'mouse') return;
@@ -129,11 +109,10 @@ document.documentElement.addEventListener('mouseleave', () => pointerTarget.set(
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   renderer.setSize(innerWidth, innerHeight, false);
-  composer.setSize(innerWidth, innerHeight);
   readScroll();
 });
 
-/* ---------- Animation ---------- */
+/* ---------- Motion helpers ---------- */
 
 const lerp = THREE.MathUtils.lerp;
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -143,55 +122,91 @@ const smoothstep = (a, b, v) => {
 };
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
+/** Critically damped spring: eases in and out of every change and never overshoots. */
+function spring(state, target, smoothTime, dt) {
+  const omega = 2 / smoothTime;
+  const x = omega * dt;
+  const decay = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const from = state.value;
+  const change = from - target;
+  const temp = (state.velocity + omega * change) * dt;
+  state.velocity = (state.velocity - omega * temp) * decay;
+  let next = target + (change + temp) * decay;
+  if (target - from > 0 === next > target) {
+    next = target;
+    state.velocity = 0;
+  }
+  state.value = next;
+  return next;
+}
+
 /** Vertical FOV that gives at least `hfov` degrees horizontally at this aspect ratio. */
 function verticalFov(hfov, aspect) {
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(hfov / 2)) / aspect));
 }
 
 /** Distance at which the screen exactly covers the viewport (like object-fit: cover). */
-function coverDistance(fov, aspect, w, h) {
+function coverDistance(fov, aspect) {
   const t = Math.tan(THREE.MathUtils.degToRad(fov / 2));
-  return Math.min(h / 2 / t, w / 2 / (t * aspect)) * 0.998;
+  return Math.min(SCREEN.height / 2 / t, SCREEN.width / 2 / (t * aspect)) * 0.998;
 }
 
+/* ---------- Frame loop ---------- */
+
+const progress = { value: 0, velocity: 0 }; // 0 = fullscreen film, 1 = sitting in the balcony
+const lookX = { value: 0, velocity: 0 };
+const lookY = { value: 0, velocity: 0 };
 const lookAt = new THREE.Vector3();
 let last = performance.now();
+let perfTime = 0;
+let perfFrames = 0;
+let perfGrace = 4; // seconds to ignore while everything loads
 
 renderer.setAnimationLoop((now) => {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   const time = now / 1000;
 
-  progress += (scrollTarget - progress) * (1 - Math.exp(-dt * SCROLL_DAMPING));
-  if (Math.abs(scrollTarget - progress) < 1e-4) progress = scrollTarget;
-  pointer.lerp(pointerTarget, 1 - Math.exp(-dt * 2.5));
+  const p = spring(progress, scrollTarget, SCROLL_SMOOTH, dt);
+  const px = spring(lookX, pointerTarget.x, LOOK_SMOOTH, dt);
+  const py = spring(lookY, pointerTarget.y, LOOK_SMOOTH, dt);
 
-  const e = easeInOutCubic(progress);
-  const drop = easeInOutCubic(clamp01((progress - 0.08) / 0.92)); // sit down slightly after pulling back
-  const s = cinema.screen;
+  const e = easeInOutCubic(p); // pull back
+  const lift = easeInOutCubic(clamp01(p * 1.3)); // rise slightly ahead of the pull back, to clear the balcony rail
 
-  // Pull back from "the screen fills your view" to "you're in row 7".
-  const fullscreenZ = SCREEN_Z + coverDistance(START_FOV, camera.aspect, s.width, s.height);
+  const fullscreenZ = SCREEN.z + coverDistance(START_FOV, camera.aspect);
   camera.position.set(
-    lerp(0, SEAT.x, e),
-    lerp(s.centerY, SEAT.y, drop) + Math.sin(Math.PI * e) * CRANE_HEIGHT + Math.sin(time * 0.5) * 0.012 * e,
-    lerp(fullscreenZ, SEAT.z, e),
+    0,
+    lerp(SCREEN.centerY, BALCONY_EYE.y, lift) + Math.sin(Math.PI * e) * CRANE_HEIGHT + Math.sin(time * 0.45) * 0.015 * e,
+    lerp(fullscreenZ, BALCONY_EYE.z, e),
   );
   // Once seated, the mouse lets you glance around the room.
-  lookAt.set(pointer.x * 3.2 * e, lerp(s.centerY, s.centerY - SEAT_LOOK_DROP, e) - pointer.y * 1.4 * e, SCREEN_Z);
+  lookAt.set(px * 4.5 * e, lerp(SCREEN.centerY, BALCONY_LOOK.y, e) - py * 2.2 * e, BALCONY_LOOK.z);
   camera.fov = lerp(START_FOV, Math.max(SEAT_FOV, verticalFov(MIN_SEAT_HFOV, camera.aspect)), e);
   camera.updateProjectionMatrix();
   camera.lookAt(lookAt);
 
-  film.update(dt, time);
-  const pixelScale = (innerHeight * pixelRatio * 0.5) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  cinema.update({ time, reveal: smoothstep(0.2, 0.9, e), glow: film.glow, pixelScale });
+  projector.update(dt);
+  cinema.update({ glow: projector.glow });
 
-  bloom.strength = 0.6 * smoothstep(0.05, 0.7, e);
-  bloom.enabled = bloom.strength > 0.001;
-  vignette.uniforms.uStrength.value = 0.85 * e;
+  ui.hint.style.opacity = String(1 - smoothstep(0, 0.06, p));
+  ui.vignette.style.opacity = String(e);
 
-  ui.hint.style.opacity = String(1 - smoothstep(0, 0.06, progress));
+  renderer.render(scene, camera);
 
-  composer.render();
+  // Keep it fluid on slower GPUs: if frames run long, render at a lower resolution.
+  perfGrace -= dt;
+  if (perfGrace < 0) {
+    perfTime += dt;
+    perfFrames++;
+    if (perfTime > 2) {
+      if (perfTime / perfFrames > 1 / 45 && pixelRatio > 1) {
+        pixelRatio = Math.max(1, pixelRatio - 0.25);
+        renderer.setPixelRatio(pixelRatio);
+        renderer.setSize(innerWidth, innerHeight, false);
+      }
+      perfTime = 0;
+      perfFrames = 0;
+    }
+  }
 });

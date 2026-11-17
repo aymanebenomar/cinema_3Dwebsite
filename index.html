@@ -7,10 +7,17 @@
     <title>Cinema</title>
   </head>
   <body>
-    <canvas id="scene" aria-label="A film playing in a 3D cinema"></canvas>
+    <canvas id="scene" aria-hidden="true"></canvas>
 
     <!-- Gives the page something to scroll; scroll position drives the camera. -->
     <div class="scroll-space" aria-hidden="true"></div>
+    <div class="vignette" id="vignette" aria-hidden="true"></div>
+
+    <div class="now-showing is-swapping" id="now-showing" aria-live="polite">
+      <span class="now-label">Now showing</span>
+      <span class="now-title" id="now-title"></span>
+      <span class="now-note" id="now-note"></span>
+    </div>
 
     <div class="loading" id="loading" aria-live="polite">Loading film</div>
 
