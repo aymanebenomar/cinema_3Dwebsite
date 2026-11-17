@@ -3,7 +3,7 @@ import { CLIPS, CLIP_SECONDS } from './clips.js';
 
 const FADE_SECONDS = 1.4; // crossfade between clips
 const PRELOAD_SECONDS = 4; // start preparing the next clip this long before the cut
-const READY_TIMEOUT = 20; // give up on a clip that hasn't buffered after this many seconds
+const READY_TIMEOUT = 12; // give up on a clip that hasn't buffered after this many seconds
 const MAX_COVER_CROP = 0.25; // crop at most this much of a picture to fill the screen
 
 /**
@@ -17,6 +17,9 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
   let incoming = null; // deck being prepared
   let muted = true;
   let failures = 0;
+  let cursor = -1; // last programme index handed to a deck
+  let starting = false; // first clip is being started
+  const nextIndex = () => (cursor = (cursor + 1) % CLIPS.length);
   let mix = 0; // 0 = deck 0 visible, 1 = deck 1 visible
   let brightness = 0; // fades the very first clip in from black
 
@@ -139,7 +142,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
     deck.texture.generateMipmaps = false;
     uniforms[`uTex${deck.slot}`].value = deck.texture;
     uniforms[`uFit${deck.slot}`].value.copy(fitFor(deck.video.videoWidth / deck.video.videoHeight));
-    if (!live) cut(deck);
+    if (!live && !starting) cut(deck);
   }
 
   /**
@@ -163,10 +166,11 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
       onFail?.();
       return;
     }
-    load(deck, (deck.index + 1) % CLIPS.length);
+    load(deck, nextIndex());
   }
 
   function cut(deck) {
+    if (!live) starting = true;
     deck.state = 'starting';
     deck.video.muted = muted;
     deck.video.volume = live ? 0 : 1;
@@ -175,8 +179,11 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
       .then(() => {
         const previous = live;
         live = deck;
-        incoming = null;
+        starting = false;
         failures = 0;
+        // At start-up both decks load at once; the slower one simply becomes the next clip.
+        const other = decks.find((d) => d !== deck);
+        incoming = previous ? null : ['loading', 'seeking', 'buffering', 'ready'].includes(other.state) ? other : null;
         deck.state = 'live';
         deck.liveSince = deck.video.currentTime;
         if (previous) previous.state = 'outgoing';
@@ -185,6 +192,7 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
       })
       .catch((err) => {
         deck.state = 'ready';
+        starting = false;
         if (err?.name === 'NotAllowedError') onBlocked?.();
       });
   }
@@ -218,18 +226,18 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
 
     if (live) {
       const elapsed = live.video.currentTime - live.liveSince;
-      const nextIndex = (live.index + 1) % CLIPS.length;
       if (!incoming && elapsed >= CLIP_SECONDS - PRELOAD_SECONDS) {
         incoming = decks.find((d) => d !== live);
-        load(incoming, nextIndex);
+        load(incoming, nextIndex());
       }
       if (incoming && incoming.state === 'ready' && (elapsed >= CLIP_SECONDS || live.video.ended)) cut(incoming);
       if (incoming && ['loading', 'seeking', 'buffering'].includes(incoming.state) && now - incoming.since > READY_TIMEOUT * 1000) {
         fail(incoming);
       }
     } else {
-      const first = decks.find((d) => ['loading', 'seeking', 'buffering'].includes(d.state));
-      if (first && now - first.since > READY_TIMEOUT * 1000) fail(first);
+      for (const d of decks) {
+        if (['loading', 'seeking', 'buffering'].includes(d.state) && now - d.since > READY_TIMEOUT * 1000) fail(d);
+      }
     }
 
     // Crossfade picture (and sound) toward the live deck.
@@ -260,7 +268,9 @@ export function createProjector({ screenAspect, startIndex = 0, onClip, onPlayin
 
   function start() {
     const n = CLIPS.length;
-    load(decks[0], ((startIndex % n) + n) % n);
+    cursor = (((startIndex - 1) % n) + n) % n;
+    load(decks[0], nextIndex());
+    load(decks[1], nextIndex()); // whichever is ready first plays first
   }
 
   function setMuted(value) {

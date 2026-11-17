@@ -6,8 +6,8 @@ import { createProjector } from './projector.js';
 /* ---------- Tunables ---------- */
 
 const START_FOV = 50; // camera lens while the film is fullscreen
-const SEAT_FOV = 53; // camera lens once you're up in the balcony
-const MIN_SEAT_HFOV = 64; // on narrow (phone) screens, widen the lens so the whole screen still fits
+const SEAT_FOV = 58; // camera lens once you're up in the balcony
+const MIN_SEAT_HFOV = 60; // on narrow (phone) screens, widen the lens so the whole screen still fits
 const SCROLL_SMOOTH = 0.55; // seconds the camera takes to catch up with the scroll (spring)
 const LOOK_SMOOTH = 0.7; // same, for mouse look
 const CRANE_HEIGHT = 0.9; // extra lift mid-move, in metres, for a floaty crane shot
@@ -22,12 +22,16 @@ renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.setClearColor(0x000000, 1);
 renderer.toneMapping = THREE.NoToneMapping;
+// Seat shadows from the house lights. Nothing in the room moves, so they're rendered once, not every frame.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.autoUpdate = false;
+renderer.shadowMap.needsUpdate = true;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(START_FOV, innerWidth / innerHeight, 0.05, 90);
+const camera = new THREE.PerspectiveCamera(START_FOV, innerWidth / innerHeight, 0.05, 120);
 
 /* ---------- Cinema + projector ---------- */
-
 
 const ui = {
   loading: document.getElementById('loading'),
