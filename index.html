@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
+    <title>Cinema</title>
+  </head>
+  <body>
+    <canvas id="scene" aria-label="A film playing in a 3D cinema"></canvas>
+
+    <!-- Gives the page something to scroll; scroll position drives the camera. -->
+    <div class="scroll-space" aria-hidden="true"></div>
+
+    <div class="loading" id="loading" aria-live="polite">Loading film</div>
+
+    <button class="play" id="play" type="button" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+      Play film
+    </button>
+
+    <div class="hint" id="hint" aria-hidden="true">
+      <span>Scroll</span>
+      <i></i>
+    </div>
+
+    <button class="sound" id="sound" type="button" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 9v6h4l5 4V5L8 9H4z" />
+        <path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
+        <path class="mute" d="M16.5 9.5l5 5M21.5 9.5l-5 5" />
+      </svg>
+      <span id="sound-label">Sound off</span>
+    </button>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
