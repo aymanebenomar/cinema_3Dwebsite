@@ -4,7 +4,7 @@ import { CLIPS, CLIP_SECONDS, REEL } from './clips.js';
 const FADE_SECONDS = 1.4; // crossfade between clips
 const PRELOAD_SECONDS = 4; // start preparing the next clip this long before the cut
 const READY_TIMEOUT = 12; // give up on a clip that hasn't buffered after this many seconds
-const MAX_COVER_CROP = 0.25; // crop at most this much of a picture to fill the screen
+const MAX_COVER_CROP = 1; // always fill the screen edge to edge (crop rather than show bars)
 
 /**
  * The projector: two video "decks" that take turns. While one plays, the other loads and seeks to the
@@ -41,8 +41,8 @@ export function createProjector({
   let hold = holdReel;
   let opacity = holdReel ? 0 : 1; // 0 = the screen is a window onto the trailer layer behind the canvas
   let opacityTarget = opacity;
-  let glowOverride = null;
-  const overrideColor = new THREE.Color();
+  let palette = null; // colours the room glows in while YouTube is on screen
+  const paletteColor = new THREE.Color();
 
   const uniforms = {
     uTex0: { value: null },
@@ -299,7 +299,7 @@ export function createProjector({
         outgoing.state = 'idle';
       }
       sampleIn -= dt;
-      if (glowOverride) sampleIn = 1; // lit by the trailer's colour instead (see below)
+      if (palette) sampleIn = 1; // lit by the film's palette instead (see below)
       if (sampleIn <= 0 && live.video.readyState >= 2) {
         sampleIn = 0.1;
         sampleFrame(live.video);
@@ -309,11 +309,16 @@ export function createProjector({
     uniforms.uBrightness.value = brightness * brightness * (3 - 2 * brightness);
     opacity += Math.sign(opacityTarget - opacity) * Math.min(Math.abs(opacityTarget - opacity), dt / 1.1);
     uniforms.uOpacity.value = opacity * opacity * (3 - 2 * opacity);
-    if (glowOverride) {
-      // YouTube doesn't let pages read its pixels, so the room glows in the film's colour, flickering gently.
+    if (palette) {
+      // YouTube doesn't let pages read its pixels, so the room glows in the film's own palette: drifting
+      // slowly from colour to colour, with the uneven flicker of projected light.
       const t = performance.now() / 1000;
+      const phase = (t / 3.4) % palette.length;
+      const i = Math.floor(phase);
+      const f = phase - i;
+      paletteColor.copy(palette[i]).lerp(palette[(i + 1) % palette.length], f * f * (3 - 2 * f));
       const flicker = 0.5 + 0.25 * Math.sin(t * 1.3) + 0.15 * Math.sin(t * 2.7 + 1.1) + 0.1 * Math.sin(t * 6.1 + 0.4);
-      sampled.copy(glowOverride).multiplyScalar(0.14 + 0.12 * flicker);
+      sampled.copy(paletteColor).multiplyScalar(0.16 + 0.17 * flicker);
     }
     glow.lerp(sampled, 1 - Math.exp(-dt * 5));
   }
@@ -358,9 +363,9 @@ export function createProjector({
     if (ready && !starting) cut(ready);
   }
 
-  /** Light the room in this colour instead of from the picture (null to go back). */
-  function setGlow(hex) {
-    glowOverride = hex ? overrideColor.set(hex) : null;
+  /** Light the room in these colours instead of from the picture (null to go back). */
+  function setGlow(colors) {
+    palette = colors ? [].concat(colors).map((c) => new THREE.Color(c)) : null;
   }
 
   function pauseReel() {
@@ -373,5 +378,97 @@ export function createProjector({
     return live.video.duration - live.video.currentTime;
   }
 
-  return { material, glow, start, update, setMuted, resume, setVisible, playReel, pauseReel, reelTimeLeft, setGlow };
+  /*
+   * Cinema acoustics for the projected film: a big-hall echo that grows as you move back into the room.
+   * Browsers only let a page start sound processing after a click, so this is set up from the sound button.
+   */
+  let audio = null;
+  function enableAudio() {
+    if (!audio) {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) return;
+      const ctx = new Context();
+      const warmth = ctx.createBiquadFilter(); // a touch of extra low end, like big cinema speakers
+      warmth.type = 'lowshelf';
+      warmth.frequency.value = 140;
+      warmth.gain.value = 0;
+      const dry = ctx.createGain();
+      const wet = ctx.createGain();
+      wet.gain.value = 0;
+      const hall = ctx.createConvolver();
+      hall.buffer = hallImpulse(ctx, 2.8);
+      warmth.connect(dry);
+      warmth.connect(hall);
+      hall.connect(wet);
+      const master = ctx.createGain(); // fades everything out as the programme wall rises
+      dry.connect(master);
+      wet.connect(master);
+      master.connect(ctx.destination);
+      for (const d of decks) ctx.createMediaElementSource(d.video).connect(warmth);
+      audio = { ctx, dry, wet, warmth, master, room: -1 };
+    }
+    audio.ctx.resume();
+  }
+
+  /** 0..1: overall volume of the projected film (the programme wall fades it out). */
+  function setMaster(value) {
+    if (audio) audio.master.gain.setTargetAtTime(value, audio.ctx.currentTime, 0.08);
+  }
+
+  /** 0 = right at the screen (dry), 1 = up in the balcony (full hall sound). */
+  function setRoom(amount) {
+    if (!audio || Math.abs(amount - audio.room) < 0.01) return;
+    audio.room = amount;
+    const t = audio.ctx.currentTime;
+    audio.dry.gain.setTargetAtTime(1 - 0.3 * amount, t, 0.08);
+    audio.wet.gain.setTargetAtTime(0.7 * amount, t, 0.08);
+    audio.warmth.gain.setTargetAtTime(4 * amount, t, 0.08);
+  }
+
+  return {
+    material,
+    glow,
+    start,
+    update,
+    setMuted,
+    resume,
+    setVisible,
+    playReel,
+    pauseReel,
+    reelTimeLeft,
+    setGlow,
+    enableAudio,
+    setRoom,
+    setMaster,
+  };
+}
+
+/**
+ * The sound of a big hall: a short pre-delay, a few early reflections off the walls, then a dense tail that
+ * darkens as it fades, the way seats and fabric soak up the high frequencies.
+ */
+function hallImpulse(ctx, seconds) {
+  const rate = ctx.sampleRate;
+  const length = Math.floor(rate * seconds);
+  const buffer = ctx.createBuffer(2, length, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buffer.getChannelData(ch);
+    let tone = 0;
+    for (let i = 0; i < length; i++) {
+      const t = i / rate;
+      const k = 0.12 + 0.8 * Math.exp(-t * 2.2); // the tail loses its treble over time
+      tone += k * (Math.random() * 2 - 1 - tone);
+      const decay = Math.pow(1 - i / length, 2.4) * Math.exp(-t * 1.3);
+      data[i] = t < 0.018 ? 0 : tone * decay;
+    }
+    for (const [ms, gain] of [
+      [23, 0.5],
+      [37, 0.35],
+      [52, 0.3],
+      [71, 0.22],
+    ]) {
+      data[Math.floor(((ms + ch * 3) / 1000) * rate)] += gain * (ch ? -1 : 1);
+    }
+  }
+  return buffer;
 }

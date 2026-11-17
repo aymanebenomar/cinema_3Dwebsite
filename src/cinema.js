@@ -24,6 +24,8 @@ const SIDE_AISLE = 1.6; // walkway kept clear along each side wall
 const SEAT_MIN_Z = 5.4; // the ends of the front rows stop short of the stage
 const STAGE = { halfWidth: ROOM.halfWidth - SIDE_AISLE, depth: 2.4, height: 0.8 };
 const BALCONY = { radius: 34.5, floor: 9.8, railHeight: 0.95 };
+const SCREEN_BORDER = 0.28; // black velvet masking around the picture, edged in brass
+const CARPET_TILE = 1.6; // metres per repeat of the carpet pattern
 
 const rowRadius = (i) => ROWS.firstRadius + i * ROWS.depth;
 const rowHeight = (i) => i * ROWS.rise;
@@ -61,25 +63,30 @@ export function createCinema(scene, screenMaterial) {
     front: new THREE.MeshStandardMaterial({ color: '#030203', roughness: 1 }),
     ceiling: new THREE.MeshStandardMaterial({ color: '#060405', roughness: 1 }),
     baffle: new THREE.MeshStandardMaterial({ color: '#0e0a0b', roughness: 0.95 }),
-    carpet: new THREE.MeshStandardMaterial({ color: '#150709', roughness: 1 }),
+    carpet: new THREE.MeshStandardMaterial({ map: makeCarpetTexture(), roughness: 1 }),
     stage: new THREE.MeshStandardMaterial({ color: '#090506', roughness: 0.8 }),
     fascia: new THREE.MeshStandardMaterial({ color: '#100a0b', roughness: 0.6 }),
-    curtain: new THREE.MeshStandardMaterial({ color: '#45060f', roughness: 0.82, side: THREE.DoubleSide }),
+    slat: new THREE.MeshStandardMaterial({ color: '#2b1c14', roughness: 0.55 }), // dark walnut
     velvet: new THREE.MeshPhysicalMaterial({
-      color: '#86101d',
-      roughness: 0.8,
+      color: '#8a111e',
+      roughness: 0.82,
       sheen: 1,
       sheenRoughness: 0.42,
       sheenColor: new THREE.Color('#ff6d7f'),
+      vertexColors: true, // soft shading baked into the creases (see seatGeometry)
+      normalMap: makeWeaveTexture(),
+      normalScale: new THREE.Vector2(0.35, 0.35),
     }),
-    frame: new THREE.MeshStandardMaterial({ color: '#141114', roughness: 0.42, metalness: 0.2 }),
+    frame: new THREE.MeshStandardMaterial({ color: '#0b0a0b', roughness: 0.78 }), // matte black, no glare
     brass: new THREE.MeshStandardMaterial({ color: '#b4893f', roughness: 0.3, metalness: 0.55 }),
     door: new THREE.MeshStandardMaterial({ color: '#150e0f', roughness: 0.7 }),
     black: new THREE.MeshBasicMaterial({ color: '#000000' }),
+    masking: new THREE.MeshStandardMaterial({ color: '#040203', roughness: 1 }),
     amber: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 0.9, 0.38) }),
-    sconce: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.1, 0.62, 0.28) }),
+    sconce: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 0.34, 0.15) }),
   };
 
+  const dummy = new THREE.Object3D(); // reused to build instance matrices
   const add = (mesh, { cast = false, receive = false } = {}) => {
     mesh.castShadow = cast;
     mesh.receiveShadow = receive;
@@ -95,7 +102,11 @@ export function createCinema(scene, screenMaterial) {
     m.rotation.set(rx, ry, 0);
     return add(m, { receive });
   };
-  plane(2 * hw, depth, mats.carpet, 0, 0, depth / 2, -Math.PI / 2, 0, true);
+  const floor = plane(2 * hw, depth, mats.carpet, 0, 0, depth / 2, -Math.PI / 2, 0, true);
+  const floorUv = floor.geometry.attributes.uv;
+  for (let i = 0; i < floorUv.count; i++) {
+    floorUv.setXY(i, (floorUv.getX(i) * 2 * hw) / CARPET_TILE, (floorUv.getY(i) * depth) / CARPET_TILE);
+  }
   plane(2 * hw, depth, mats.ceiling, 0, height, depth / 2, Math.PI / 2);
   plane(depth, height, mats.wall, -hw, height / 2, depth / 2, 0, Math.PI / 2);
   plane(depth, height, mats.wall, hw, height / 2, depth / 2, 0, -Math.PI / 2);
@@ -137,22 +148,33 @@ export function createCinema(scene, screenMaterial) {
   const stage = new THREE.Mesh(new THREE.BoxGeometry(2 * STAGE.halfWidth, STAGE.height, STAGE.depth), mats.stage);
   stage.position.set(0, STAGE.height / 2, STAGE.depth / 2);
   add(stage, { receive: true });
-  const stageEdge = new THREE.Mesh(new THREE.BoxGeometry(2 * STAGE.halfWidth - 0.3, 0.015, 0.02), mats.amber);
-  stageEdge.position.set(0, STAGE.height - 0.01, STAGE.depth + 0.01);
-  add(stageEdge);
 
-  /* ---------- Curtains ---------- */
+  /* ---------- Screen wall ---------- */
 
-  const curtainInner = SCREEN.width / 2 + 0.6;
-  const sideCurtainW = hw - curtainInner + 0.05;
+  // A modern cinema front instead of curtains: dark walnut slats on the wall either side of the screen, and a
+  // bulkhead across the top, faced with the same slats, so the space above the screen is finished architecture.
+  const BULKHEAD = { bottom: 13.2, depth: 2.6 };
+  const bulkhead = new THREE.Mesh(new THREE.BoxGeometry(2 * hw, height - BULKHEAD.bottom, BULKHEAD.depth), mats.wall);
+  bulkhead.position.set(0, (BULKHEAD.bottom + height) / 2, BULKHEAD.depth / 2);
+  add(bulkhead, { receive: true });
+
+  const slatMatrices = [];
+  const slat = (x, y, z, h) => {
+    dummy.position.set(x, y, z);
+    dummy.scale.set(1, h, 1);
+    dummy.updateMatrix();
+    slatMatrices.push(dummy.matrix.clone());
+  };
+  const SLAT_GAP = 0.2;
+  const portalFrom = SCREEN.width / 2 + SCREEN_BORDER + 0.25;
   for (const s of [-1, 1]) {
-    const c = new THREE.Mesh(curtainGeometry(sideCurtainW, 13.4, 6, 0.14), mats.curtain);
-    c.position.set(s * (curtainInner + sideCurtainW / 2), 6.7, 0.35);
-    add(c);
+    for (let x = portalFrom; x <= hw - 0.1; x += SLAT_GAP) slat(s * x, BULKHEAD.bottom / 2, 0.06, BULKHEAD.bottom);
   }
-  const valance = new THREE.Mesh(curtainGeometry(2 * hw, 1.6, 34, 0.07), mats.curtain);
-  valance.position.set(0, 13.6, 0.5);
-  add(valance);
+  for (let x = -hw + 0.1; x <= hw - 0.1; x += SLAT_GAP) {
+    slat(x, (BULKHEAD.bottom + height) / 2, BULKHEAD.depth + 0.05, height - BULKHEAD.bottom);
+  }
+  dummy.scale.set(1, 1, 1);
+  add(instanced(new THREE.BoxGeometry(0.07, 1, 0.09), mats.slat, slatMatrices), { cast: false, receive: true });
 
   /* ---------- Curved stadium floor ---------- */
 
@@ -166,7 +188,6 @@ export function createCinema(scene, screenMaterial) {
 
   /* ---------- Seats ---------- */
 
-  const dummy = new THREE.Object3D();
   const place = (list, r, a, y, offset = 0) => {
     dummy.position.set(polarX(r, a) + Math.cos(a) * offset, y, polarZ(r, a) - Math.sin(a) * offset);
     dummy.rotation.set(0, a, 0);
@@ -237,7 +258,8 @@ export function createCinema(scene, screenMaterial) {
   /* ---------- Screen and light ---------- */
 
   const { width: W, height: H, centerY: cy } = SCREEN;
-  const mask = new THREE.Mesh(new THREE.PlaneGeometry(W + 0.6, H + 0.6), mats.black);
+  // Cinema-style surround: a slim edge of black velvet masking.
+  const mask = new THREE.Mesh(new THREE.PlaneGeometry(W + 2 * SCREEN_BORDER, H + 2 * SCREEN_BORDER), mats.masking);
   mask.position.set(0, cy, 0.03);
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(W, H), screenMaterial);
   screen.position.set(0, cy, SCREEN.z);
@@ -249,10 +271,25 @@ export function createCinema(scene, screenMaterial) {
   screenLight.position.set(0, cy, 0.15);
   screenLight.lookAt(0, cy, 30);
   root.add(screenLight);
-  root.add(new THREE.HemisphereLight('#2b2638', '#0a0405', 0.35));
+  // Like a real cinema during the film, the house lights never go fully out: there's always a low glow.
+  root.add(new THREE.HemisphereLight('#2b2638', '#0a0405', 0.16));
+
+  // The film's own light, thrown from the screen across the seats in the film's colours. It casts
+  // shadows: every seat throws one back over the row behind it.
+  const filmLight = new THREE.SpotLight('#ffffff', 0, 80, 0.98, 0.9, 1.15);
+  filmLight.position.set(0, cy - 0.6, 1.4);
+  filmLight.target.position.set(0, 2.2, 21);
+  filmLight.castShadow = true;
+  filmLight.shadow.mapSize.set(2048, 2048);
+  filmLight.shadow.camera.near = 1.5;
+  filmLight.shadow.camera.far = 70;
+  filmLight.shadow.bias = -0.0006;
+  filmLight.shadow.normalBias = 0.03;
+  filmLight.shadow.radius = 4;
+  root.add(filmLight, filmLight.target);
 
   // Dimmed house lights from above and behind: they model the seats and cast their shadows.
-  const house = new THREE.DirectionalLight('#ffbf9a', 1.1);
+  const house = new THREE.DirectionalLight('#ffbf9a', 0.38);
   house.position.set(0, 46, 52);
   house.target.position.set(0, 0, 14);
   house.castShadow = true;
@@ -270,8 +307,12 @@ export function createCinema(scene, screenMaterial) {
   function update({ glow }) {
     const lum = glow.r * 0.2126 + glow.g * 0.7152 + glow.b * 0.0722;
     hue.copy(glow).multiplyScalar(1 / Math.max(glow.r, glow.g, glow.b, 1e-3));
-    screenLight.color.copy(white).lerp(hue, 0.7);
-    screenLight.intensity = 0.8 + Math.min(lum, 0.6) * 9;
+    const energy = Math.min(lum, 0.6);
+    screenLight.color.copy(white).lerp(hue, 0.75);
+    screenLight.intensity = 0.55 + energy * 4; // even a black frame leaves the screen faintly glowing
+    filmLight.color.copy(white).lerp(hue, 0.85);
+    filmLight.intensity = 7 + energy * 70;
+    // The brass catches the light of the picture.
   }
 
   return { root, update };
@@ -292,9 +333,14 @@ function instanced(geometry, material, matrices) {
 function arcStepGeometry(inner, outer, height, end, segments = 64) {
   const pos = [];
   const nor = [];
+  const uvs = [];
   const quad = (a, b, c, d, n) => {
     pos.push(...a, ...b, ...c, ...a, ...c, ...d);
     for (let k = 0; k < 6; k++) nor.push(...n);
+    // Carpet pattern laid out in metres: across the floor on treads, up the face on risers.
+    for (const q of [a, b, c, a, c, d]) {
+      uvs.push(n[1] > 0.5 ? q[0] / CARPET_TILE : (q[0] + q[2]) / CARPET_TILE, (n[1] > 0.5 ? q[2] : q[1]) / CARPET_TILE);
+    }
   };
   const at = (r, a, y) => [polarX(r, a), y, polarZ(r, a)];
   for (let k = 0; k < segments; k++) {
@@ -313,7 +359,7 @@ function arcStepGeometry(inner, outer, height, end, segments = 64) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Array((pos.length / 3) * 2).fill(0), 2));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   return g;
 }
 
@@ -367,58 +413,163 @@ function roundedProfile(x0, y0, x1, y1, r) {
   return s;
 }
 
-/** A backrest cushion: flat at the back, the front bulging gently at the lumbar. */
-function padProfile(h, tBottom, tTop, bulge, r) {
+/** A rectangle centred on the origin, with separate radii for its top and bottom corners. */
+function roundedRectShape(w, h, rTop, rBottom = rTop) {
+  const x0 = -w / 2;
+  const x1 = w / 2;
+  const y0 = -h / 2;
+  const y1 = h / 2;
   const s = new THREE.Shape();
-  s.moveTo(0, r);
-  s.lineTo(0, h - r);
-  s.quadraticCurveTo(0, h, r, h);
-  s.lineTo(tTop - r, h);
-  s.quadraticCurveTo(tTop, h, tTop, h - r);
-  s.quadraticCurveTo(tTop + bulge, h * 0.45, tBottom, r);
-  s.quadraticCurveTo(tBottom, 0, tBottom - r, 0);
-  s.lineTo(r, 0);
-  s.quadraticCurveTo(0, 0, 0, r);
+  s.moveTo(x0 + rBottom, y0);
+  s.lineTo(x1 - rBottom, y0);
+  s.quadraticCurveTo(x1, y0, x1, y0 + rBottom);
+  s.lineTo(x1, y1 - rTop);
+  s.quadraticCurveTo(x1, y1, x1 - rTop, y1);
+  s.lineTo(x0 + rTop, y1);
+  s.quadraticCurveTo(x0, y1, x0, y1 - rTop);
+  s.lineTo(x0, y0 + rBottom);
+  s.quadraticCurveTo(x0, y0, x0 + rBottom, y0);
   return s;
 }
 
-/** Upholstered parts of one seat: cushion with a rolled front, and a two-part reclined backrest. */
-function seatGeometry() {
-  const cushion = profileSolid(roundedProfile(-0.22, 0.33, 0.28, 0.465, [0.03, 0.065, 0.03, 0.025]), 0.5, 0.02);
-  cushion.rotateX(-0.04);
-
-  const lower = profileSolid(padProfile(0.36, 0.15, 0.12, 0.035, 0.03), 0.52, 0.022);
-  const upper = profileSolid(padProfile(0.27, 0.12, 0.1, 0.012, 0.045), 0.5, 0.022);
-  upper.translate(0, 0.375, 0.005);
-  const back = mergeGeometries([lower, upper]);
-  back.rotateX(0.24); // recline
-  back.translate(0, 0.46, 0.36);
-
-  return mergeGeometries([cushion, back]);
+/**
+ * A padded panel: w × h (outer size) and `thickness` deep along z, centred, with its edges rounded over like
+ * upholstery stretched across foam. rTop / rBottom round its corners.
+ */
+function padded(w, h, thickness, softness, rTop, rBottom = rTop) {
+  const grow = softness * 0.85; // the bevel widens the outline by this much on every side
+  const g = new THREE.ExtrudeGeometry(roundedRectShape(w - 2 * grow, h - 2 * grow, rTop, rBottom), {
+    depth: Math.max(0.002, thickness - 2 * softness),
+    bevelEnabled: true,
+    bevelThickness: softness,
+    bevelSize: grow,
+    bevelSegments: 3,
+    curveSegments: 6,
+  });
+  g.translate(0, 0, -(thickness - 2 * softness) / 2);
+  return g;
 }
 
-/** Side standard, padded armrest and cup holder; one between every two seats. */
+/**
+ * Upholstered parts of one cinema seat (origin on the floor, facing -z): a padded seat cushion and a reclined
+ * backrest of two padded panels with a seam between them, the upper one rounded at the shoulders.
+ */
+function seatGeometry() {
+  const cushion = padded(0.5, 0.5, 0.13, 0.045, 0.06);
+  cushion.rotateX(-Math.PI / 2); // lie flat, padding upward
+  cushion.rotateX(-0.05); // front edge a touch higher, as seats are
+  cushion.translate(0, 0.42, -0.04);
+
+  const lower = padded(0.54, 0.36, 0.14, 0.05, 0.04);
+  lower.translate(0, 0.18, 0);
+  const upper = padded(0.54, 0.3, 0.12, 0.05, 0.11, 0.04);
+  upper.translate(0, 0.375 + 0.15, 0.008);
+  const back = mergeGeometries([lower, upper]);
+  back.rotateX(0.24); // recline
+  back.translate(0, 0.47, 0.3);
+
+  const seat = mergeGeometries([cushion, back]);
+  shadeCreases(seat);
+  return seat;
+}
+
+/**
+ * Bake soft shading into a seat's vertex colours, the way light falls off on real upholstery: darker deep in
+ * the crease between seat and back, lower down, and next to the armrests.
+ */
+function shadeCreases(g) {
+  const smooth = (a, b, v) => {
+    const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+  const p = g.attributes.position;
+  const colors = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const y = p.getY(i);
+    const z = p.getZ(i);
+    const crease = Math.hypot(y - 0.49, z - 0.25);
+    const shade =
+      (0.5 + 0.5 * smooth(0.02, 0.22, crease)) * (0.7 + 0.3 * smooth(0.3, 0.95, y)) * (1 - 0.2 * smooth(0.2, 0.28, Math.abs(x)));
+    colors.set([shade, shade, shade], i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+/** Side standard, padded armrest and a recessed cup holder; one between every two seats. */
 function armGeometry() {
-  const standard = profileSolid(roundedProfile(-0.2, 0, 0.24, 0.62, [0.04, 0.09, 0.01, 0.01]), 0.05, 0.01);
-  const rest = profileSolid(roundedProfile(-0.25, 0.615, 0.27, 0.67, 0.022), 0.08, 0.015);
-  const ring = new THREE.TorusGeometry(0.042, 0.009, 6, 18).toNonIndexed();
+  const standard = profileSolid(roundedProfile(-0.22, 0, 0.24, 0.6, [0.03, 0.08, 0.01, 0.01]), 0.055, 0.012);
+  const rest = padded(0.085, 0.56, 0.055, 0.02, 0.035);
+  rest.rotateX(-Math.PI / 2);
+  rest.translate(0, 0.635, 0);
+  const ring = new THREE.TorusGeometry(0.045, 0.01, 6, 18).toNonIndexed();
   ring.rotateX(Math.PI / 2);
-  ring.translate(0, 0.668, -0.33);
-  const cup = new THREE.CylinderGeometry(0.042, 0.034, 0.09, 18, 1, true).toNonIndexed();
-  cup.translate(0, 0.623, -0.33);
+  ring.translate(0, 0.665, -0.33);
+  const cup = new THREE.CylinderGeometry(0.044, 0.036, 0.1, 18, 1, true).toNonIndexed();
+  cup.translate(0, 0.615, -0.33);
   return mergeGeometries([standard, rest, ring, cup]);
 }
 
-/** A flat plane with vertical folds, like hanging velvet. */
-function curtainGeometry(w, h, folds, amp) {
-  const g = new THREE.PlaneGeometry(w, h, Math.max(32, Math.round(folds * 14)), 1);
-  const p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const u = p.getX(i) / w;
-    p.setZ(i, Math.sin(u * folds * Math.PI * 2) * amp + Math.sin(u * folds * 5.1 + 1.7) * amp * 0.25);
+/** Fine woven fabric, as a normal map: a tight grid of threads with a little irregularity. */
+function makeWeaveTexture() {
+  const size = 64;
+  const height = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const warp = Math.sin((x / size) * Math.PI * 2 * 8);
+      const weft = Math.sin((y / size) * Math.PI * 2 * 8);
+      height[y * size + x] = 0.5 * (warp * (y % 8 < 4 ? 1 : -1) + weft * (x % 8 < 4 ? -1 : 1)) + (Math.random() - 0.5) * 0.4;
+    }
   }
-  g.computeVertexNormals();
-  return g;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const g = c.getContext('2d');
+  const img = g.createImageData(size, size);
+  const h = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = h(x + 1, y) - h(x - 1, y);
+      const dy = h(x, y + 1) - h(x, y - 1);
+      const n = new THREE.Vector3(-dx, -dy, 2).normalize();
+      const i = (y * size + x) * 4;
+      img.data[i] = (n.x * 0.5 + 0.5) * 255;
+      img.data[i + 1] = (n.y * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (n.z * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(30, 30); // one weave tile every ~3 cm (seat UVs are in metres)
+  return t;
+}
+
+/** Plain deep-burgundy cinema carpet: one calm colour with a fine pile texture, tiling seamlessly. */
+function makeCarpetTexture() {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const g = c.getContext('2d');
+  g.fillStyle = '#3a0d14';
+  g.fillRect(0, 0, size, size);
+  const img = g.getImageData(0, 0, size, size);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 12; // individual tufts, barely there
+    img.data[i] += n;
+    img.data[i + 1] += n * 0.35;
+    img.data[i + 2] += n * 0.35;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
 }
 
 function makeExitTexture() {

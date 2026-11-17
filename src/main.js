@@ -5,15 +5,16 @@ import { createCinema, SCREEN, BALCONY_EYE, BALCONY_LOOK } from './cinema.js';
 import { createProjector } from './projector.js';
 import { TRAILERS } from './clips.js';
 import { createTrailers, FRAME } from './trailers.js';
+import { createProgramme } from './programme.js';
 
 /* ---------- Tunables ---------- */
 
 const START_FOV = 50; // camera lens while the film is fullscreen
 const SEAT_FOV = 58; // camera lens once you're up in the balcony
 const MIN_SEAT_HFOV = 60; // on narrow (phone) screens, widen the lens so the whole screen still fits
-const SCROLL_SMOOTH = 0.55; // seconds the camera takes to catch up with the scroll (spring)
+const ZOOM_SMOOTH = 0.75; // the pull-back is one smooth move of about two and a half seconds
 const LOOK_SMOOTH = 0.7; // same, for mouse look
-const CRANE_HEIGHT = 0.9; // extra lift mid-move, in metres, for a floaty crane shot
+const CRANE_HEIGHT = 0.5; // a gentle extra lift mid-move, in metres, like a crane shot
 
 /* ---------- Renderers ---------- */
 
@@ -49,7 +50,10 @@ frameEl.style.height = `${FRAME.height}px`;
 const screenObject = new CSS3DObject(frameEl);
 frameEl.style.pointerEvents = 'none'; // the player must never react to the mouse
 screenObject.position.set(0, SCREEN.centerY, SCREEN.z);
-screenObject.scale.setScalar((SCREEN.width / FRAME.width) * 1.004); // a hair larger: no seam at the edges
+// Most of these videos carry black bars inside the picture. Zoomed in a little, the bars fall outside the
+// screen, so every film fills it edge to edge and the screen never seems to change size.
+const FILL_ZOOM = 1.12;
+screenObject.scale.setScalar((SCREEN.width / FRAME.width) * FILL_ZOOM);
 cssScene.add(screenObject);
 
 /* ---------- Cinema + projector ---------- */
@@ -64,6 +68,7 @@ const ui = {
   nowTitle: document.getElementById('now-title'),
   nowNote: document.getElementById('now-note'),
   vignette: document.getElementById('vignette'),
+  hintProgramme: document.getElementById('hint-programme'),
 };
 
 const startClip = Number.parseInt(new URLSearchParams(location.search).get('clip') ?? '0', 10) || 0;
@@ -86,48 +91,43 @@ const projector = createProjector({
 });
 const cinema = createCinema(scene, projector.material);
 
-// The programme: the reel plays continuously, and the studio trailers (YouTube) cut in over it as soon as
-// they're ready — at start-up, then each time the reel comes round to its end. The screen is never black.
-let trailersWork = TRAILERS.length > 0;
-let trailersQueued = false;
+// The programme: the famous films, 10 seconds each, round and round. Until the first one is ready the screen
+// stays dark, like a real cinema before the show. If YouTube can't load at all, the reel plays instead.
 let trailerFailures = 0;
-const trailers = trailersWork
+const trailers = TRAILERS.length
   ? createTrailers(frameEl, TRAILERS, {
-      onShow: (trailer, index) => {
+      onShow: (film) => {
         trailerFailures = 0;
         ui.loading.classList.add('is-done');
-        if (index === 0) {
-          projector.setVisible(0); // the screen becomes a window onto the trailer
-          setTimeout(() => projector.pauseReel(), 1300);
-        }
-        projector.setGlow(trailer.light);
-        showTitle(trailer);
+        projector.setVisible(0); // the screen becomes a window onto the film
+        projector.setGlow(film.light);
+        showTitle(film);
       },
-      onDone: () => backToReel(),
       onFail: () => {
-        // Try again next time the reel comes round; after three misses in a row, YouTube is clearly blocked here.
-        if (++trailerFailures >= 3) trailersWork = false;
-        backToReel();
+        // Try again in a moment; after three misses in a row, YouTube is clearly blocked here.
+        if (++trailerFailures >= 3) startReel();
+        else setTimeout(() => trailers.play(), 4000);
       },
     })
   : null;
 
-function queueTrailers(at = 0) {
-  if (!trailersWork || trailersQueued) return;
-  trailersQueued = true;
-  trailers.play({ at });
-}
-
-function backToReel() {
-  trailersQueued = false;
+function startReel() {
+  trailers?.stop();
   projector.setGlow(null);
   projector.setVisible(1);
-  projector.playReel();
-  trailers?.stop();
+  projector.start();
 }
 
-projector.start();
-queueTrailers();
+if (trailers) trailers.play();
+else startReel();
+
+// This week's programme, on the wall that rises over the cinema. Picking a film takes you back to watch it.
+const programme = createProgramme({
+  onSelect: (index) => {
+    trailers?.jump(index);
+    window.scrollTo({ top: Math.round(window.innerHeight * 0.3), behavior: 'smooth' });
+  },
+});
 
 ui.play.addEventListener('click', () => {
   ui.play.hidden = true;
@@ -137,6 +137,7 @@ ui.play.addEventListener('click', () => {
 let muted = true;
 ui.sound.addEventListener('click', () => {
   muted = !muted;
+  projector.enableAudio(); // the click lets the browser start the cinema sound
   projector.setMuted(muted);
   trailers?.setMuted(muted);
   ui.sound.setAttribute('aria-pressed', String(!muted));
@@ -160,10 +161,11 @@ function showTitle(clip) {
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 window.scrollTo(0, 0);
 
-let scrollTarget = 0;
+let zoomTarget = 0; // 0 = the film fullscreen, 1 = up in the balcony
 function readScroll() {
-  const max = document.documentElement.scrollHeight - innerHeight;
-  scrollTarget = max > 0 ? THREE.MathUtils.clamp(window.scrollY / max, 0, 1) : 0;
+  // A little scroll is enough: scrolling down from the top plays the whole move out, back to the top plays it in.
+  if (window.scrollY > 24) zoomTarget = 1;
+  else if (window.scrollY < 4) zoomTarget = 0;
 }
 addEventListener('scroll', readScroll, { passive: true });
 readScroll();
@@ -190,7 +192,6 @@ const smoothstep = (a, b, v) => {
   const t = clamp01((v - a) / (b - a));
   return t * t * (3 - 2 * t);
 };
-const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 /** Critically damped spring: eases in and out of every change and never overshoots. */
 function spring(state, target, smoothTime, dt) {
@@ -237,38 +238,42 @@ renderer.setAnimationLoop((now) => {
   last = now;
   const time = now / 1000;
 
-  const p = spring(progress, scrollTarget, SCROLL_SMOOTH, dt);
+  const p = spring(progress, zoomTarget, ZOOM_SMOOTH, dt);
   const px = spring(lookX, pointerTarget.x, LOOK_SMOOTH, dt);
   const py = spring(lookY, pointerTarget.y, LOOK_SMOOTH, dt);
 
-  const e = easeInOutCubic(p); // pull back
-  const lift = easeInOutCubic(clamp01(p * 1.3)); // rise slightly ahead of the pull back, to clear the balcony rail
+  const e = p; // the spring already starts gently and settles softly
 
   const fullscreenZ = SCREEN.z + coverDistance(START_FOV, camera.aspect);
   camera.position.set(
     0,
-    lerp(SCREEN.centerY, BALCONY_EYE.y, lift) + Math.sin(Math.PI * e) * CRANE_HEIGHT + Math.sin(time * 0.45) * 0.015 * e,
+    lerp(SCREEN.centerY, BALCONY_EYE.y, e) + Math.sin(Math.PI * e) * CRANE_HEIGHT + Math.sin(time * 0.45) * 0.015 * e,
     lerp(fullscreenZ, BALCONY_EYE.z, e),
   );
   // Once seated, the mouse lets you glance around the room.
-  lookAt.set(px * 4.5 * e, lerp(SCREEN.centerY, BALCONY_LOOK.y, e) - py * 2.2 * e, BALCONY_LOOK.z);
+  lookAt.set(px * 4.5 * e, lerp(SCREEN.centerY, BALCONY_LOOK.y, e) - py * 1.1 * e, BALCONY_LOOK.z);
   camera.fov = lerp(START_FOV, Math.max(SEAT_FOV, verticalFov(MIN_SEAT_HFOV, camera.aspect)), e);
   camera.updateProjectionMatrix();
   camera.lookAt(lookAt);
 
   projector.update(dt);
-  // Line the trailers up to cut in exactly where the reel comes round to its end.
-  if (trailersWork && !trailersQueued) {
-    const left = projector.reelTimeLeft();
-    if (left !== null && left < 8) queueTrailers(performance.now() + left * 1000);
-  }
+  const cover = programme.update(dt); // how much of the cinema the programme wall hides
+  document.documentElement.style.setProperty('--cover', cover.toFixed(3));
   cinema.update({ glow: projector.glow });
 
   ui.hint.style.opacity = String(1 - smoothstep(0, 0.06, p));
   ui.vignette.style.opacity = String(e);
+  projector.setRoom(e); // the further back you are, the more of the hall you hear
+  trailers?.setDistance(e);
+  projector.setMaster(1 - cover); // and as the wall rises, the sound fades away
+  trailers?.setMaster(1 - cover);
+  ui.hintProgramme.style.opacity = String(smoothstep(0.92, 1, e) * (1 - smoothstep(0, 0.12, cover)));
 
-  renderer.render(scene, camera);
-  cssRenderer.render(cssScene, camera);
+  // Once the wall hides the cinema completely, stop drawing it (saves the battery); it resumes on the way back.
+  if (cover < 0.999) {
+    renderer.render(scene, camera);
+    cssRenderer.render(cssScene, camera);
+  }
 
   // Keep it fluid on slower GPUs: if frames run long, render at a lower resolution.
   perfGrace -= dt;

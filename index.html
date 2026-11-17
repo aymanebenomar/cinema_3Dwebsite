@@ -5,12 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#000000" />
     <title>Cinema</title>
+    <!-- Open the connections to YouTube while the page loads, so the first film starts sooner. -->
+    <link rel="preconnect" href="https://www.youtube.com" />
+    <link rel="preconnect" href="https://www.youtube-nocookie.com" />
+    <link rel="preconnect" href="https://i.ytimg.com" />
+    <link rel="preconnect" href="https://www.google.com" />
   </head>
   <body>
     <canvas id="scene" aria-hidden="true"></canvas>
 
     <!-- Gives the page something to scroll; scroll position drives the camera. -->
     <div class="scroll-space" aria-hidden="true"></div>
+
+    <!-- This week's programme: a wall that rises over the cinema; scrolling on slides the film cards along. -->
+    <section class="wall" id="wall" aria-labelledby="wall-title">
+      <div class="wall-pin">
+        <header class="wall-head">
+          <p class="wall-kicker">This week</p>
+          <h2 class="wall-title" id="wall-title">Now Showing</h2>
+          <p class="wall-dates" id="wall-dates"></p>
+        </header>
+        <ol class="wall-track" id="wall-track"></ol>
+        <div class="wall-progress" aria-hidden="true"><span id="wall-progress"></span></div>
+      </div>
+    </section>
+
+    <div class="hint hint-programme" id="hint-programme" aria-hidden="true">
+      <span>This week's programme</span>
+      <i></i>
+    </div>
     <div class="vignette" id="vignette" aria-hidden="true"></div>
 
     <div class="now-showing is-swapping" id="now-showing" aria-live="polite">

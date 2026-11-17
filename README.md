@@ -17,18 +17,27 @@ Then open http://localhost:5173. If the page ever looks stuck after code changes
 
 ## Famous films
 
-Twelve famous films play first, 10 seconds each, crossfading into one another: The Batman, Spider-Man: No Way
-Home, La La Land, Interstellar, Top Gun: Maverick, Titanic, Avengers: Endgame, The Notebook, Dune, Joker,
-The Dark Knight and Oppenheimer. They're the studios' official videos, played through YouTube's own embedded
-player at up to 1080p, because that's the legal way to show this footage without owning it. They need an
-internet connection. The reel below plays while they load and after they finish, so the screen is never black.
+The programme is twelve famous films, 10 seconds each, crossfading round and round: Spider-Man: No Way Home,
+The Batman, La La Land, then Interstellar, Top Gun: Maverick, Titanic, Avengers: Endgame, The Notebook, Dune,
+Joker, The Dark Knight and Oppenheimer. They're the studios' official videos, played through YouTube's own
+embedded player (the legal way to show this footage without owning it), so they need an internet connection.
+
+- Every film fills the screen edge to edge; the black bars many of these videos carry are zoomed out of view.
+- Around each cut the sound eases down before the cut and fades back in after it, so lines aren't chopped mid-word.
+- The room is lit in each film's colours; the house lights stay at a low glow, as in a real cinema.
 
 Edit the list (`TRAILERS`) in `src/clips.js`: each entry is a YouTube video id, the second to start at,
-and a light colour for the room. Empty the list to show only the reel.
+and the colours the film throws onto the room.
 
-## The reel
+## Sound
 
-The rest of the programme is one video, `src/reel/reel.mp4`, built by:
+Press "Sound on". Films playing from the site's own video file (the reel) take on the echo of a big hall as you
+move back into the room. Websites can't process YouTube's audio, so the famous films only get a little quieter
+and more distant in the balcony.
+
+## The reel (backup)
+
+If YouTube can't load (offline, blocked), the screen plays one video instead, `src/reel/reel.mp4`, built by:
 
 ```bash
 npm run reel

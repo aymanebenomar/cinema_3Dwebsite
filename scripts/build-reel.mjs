@@ -35,7 +35,7 @@ const FADE = 1; // crossfade between films
 const WIDTH = 1920;
 const HEIGHT = 872; // the cinema screen is 2.2:1
 const FPS = 30;
-const MAX_CROP = 0.25; // crop at most this much of a picture to fill the screen; letterbox the rest
+const MAX_CROP = 1; // always fill the screen edge to edge: crop rather than show black bars
 const STRETCH = 90; // seconds of each feature film scanned per stretch
 const VIDEO_FILE = /\.(mp4|m4v|mov|webm|mkv)$/i;
 
@@ -262,7 +262,7 @@ function fitFilter(aspect) {
   const target = WIDTH / HEIGHT;
   const square = 'scale=iw*sar:ih,setsar=1';
   if (aspect < target) {
-    const shown = Math.min(target, aspect / (1 - MAX_CROP));
+    const shown = MAX_CROP >= 1 ? target : Math.min(target, aspect / (1 - MAX_CROP));
     return `${square},crop=iw:iw/${shown.toFixed(5)},scale=${even(HEIGHT * shown)}:${HEIGHT},pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2:black`;
   }
   const shown = Math.max(target, aspect * (1 - MAX_CROP));
@@ -271,7 +271,7 @@ function fitFilter(aspect) {
 
 async function renderSegment(film, info, start) {
   const length = SEGMENT + FADE;
-  const out = path.join(CACHE_DIR, `segment-${hash(`${film.src}|${start}|${WIDTH}x${HEIGHT}|${length}|v2`)}.mp4`);
+  const out = path.join(CACHE_DIR, `segment-${hash(`${film.src}|${start}|${WIDTH}x${HEIGHT}|${length}|fill-v3`)}.mp4`);
   if (existsSync(out)) return out;
   const args = ['-y', '-hide_banner', '-loglevel', 'error', ...inputOptions(film.src), '-ss', start.toFixed(3), '-t', String(length), '-i', input(film.src)];
   if (!info.hasAudio) args.push('-f', 'lavfi', '-t', String(length), '-i', 'anullsrc=r=48000:cl=stereo');
