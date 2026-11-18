@@ -10,6 +10,7 @@
     "reel": "node scripts/build-reel.mjs"
   },
   "dependencies": {
+    "lenis": "^1.3.27",
     "three": "^0.187.0"
   },
   "devDependencies": {

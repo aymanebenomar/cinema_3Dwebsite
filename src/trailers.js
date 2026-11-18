@@ -69,6 +69,34 @@ export function createTrailers(frameEl, list, { onShow, onFail } = {}) {
   let jumpTo = null; // a film picked from the programme, to cut to as soon as it's ready
   const loud = () => 100 * level * master;
 
+  // Each player's volume is its own fade (`gain`, 0..1: easing in at a cut, tailing off before one) times
+  // the room's volume (`loud`). Keeping the two apart means a fade never fights the wall or the balcony.
+  function applyVolume(slot) {
+    if (typeof slot.player?.setVolume !== 'function') return;
+    slot.player.setVolume(Math.round((slot.gain ?? 1) * loud()));
+  }
+
+  /** Smoothly move a player's fade to `to`. A newer fade on the same player wins. */
+  function fade(slot, to, ms) {
+    const token = (slot.rampToken = (slot.rampToken || 0) + 1);
+    const from = slot.gain ?? 1;
+    const t0 = performance.now();
+    const step = () => {
+      if (slot.rampToken !== token) return;
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      slot.gain = from + (to - from) * k * k * (3 - 2 * k);
+      applyVolume(slot);
+      if (k < 1) setTimeout(step, 40);
+    };
+    step();
+  }
+
+  /** The room's volume changed: apply it to whatever can be heard. */
+  function applyRoom() {
+    if (muted) return;
+    for (const slot of slots) if (slot === live || slot.wrap.classList.contains('is-leaving')) applyVolume(slot);
+  }
+
   function init() {
     if (!ready) {
       // No time limit: the reel keeps playing meanwhile, so a slow YouTube just means the films cut in later.
@@ -180,19 +208,21 @@ export function createTrailers(frameEl, list, { onShow, onFail } = {}) {
     slot.wrap.className = 'trailer is-live';
     if (!muted) {
       // The new film's sound eases in rather than starting at full volume mid-scene.
-      slot.player.setVolume(0);
+      slot.rampToken = (slot.rampToken || 0) + 1;
+      slot.gain = 0;
+      applyVolume(slot);
       slot.player.unMute();
-      rampVolume(slot, 0, loud(), SOUND_IN_MS);
+      fade(slot, 1, SOUND_IN_MS);
     }
     if (previous && previous !== slot) {
       previous.wrap.className = 'trailer is-leaving'; // fades out on top, uncovering the new film
-      if (!muted) rampVolume(previous, previous.volume ?? loud(), 0, SOUND_OUT_MS);
+      if (!muted) fade(previous, 0, SOUND_OUT_MS);
       setTimeout(() => retire(previous), FADE_MS + 150);
     }
     // Let the sound tail off just before the cut, so a line trails away instead of being chopped.
     clearTimeout(slot.fadeTimer);
     slot.fadeTimer = setTimeout(() => {
-      if (live === slot && !muted) rampVolume(slot, slot.volume ?? loud(), 0.3 * loud(), SOUND_TAIL_MS);
+      if (live === slot && !muted) fade(slot, 0.3, SOUND_TAIL_MS);
     }, CLIP_SECONDS * 1000 - SOUND_TAIL_MS);
     onShow?.(list[slot.index], slot.index);
     clearTimeout(nextTimer);
@@ -249,13 +279,16 @@ export function createTrailers(frameEl, list, { onShow, onFail } = {}) {
 
   function setMuted(value) {
     muted = value;
-    if (!live) return;
-    if (muted) live.player.mute();
-    else {
+    if (muted) {
+      for (const slot of slots) {
+        slot.rampToken = (slot.rampToken || 0) + 1; // stop any fade
+        if (typeof slot.player?.mute === 'function') slot.player.mute();
+      }
+    } else if (live && typeof live.player?.unMute === 'function') {
       live.rampToken = (live.rampToken || 0) + 1;
-      live.volume = loud();
+      live.gain = 1;
+      applyVolume(live);
       live.player.unMute();
-      live.player.setVolume(Math.round(live.volume));
     }
   }
 
@@ -264,10 +297,7 @@ export function createTrailers(frameEl, list, { onShow, onFail } = {}) {
     const next = 1 - 0.3 * amount;
     if (Math.abs(next - level) < 0.02) return;
     level = next;
-    if (live && !muted && !live.ramping && typeof live.player.setVolume === 'function') {
-      live.volume = loud();
-      live.player.setVolume(Math.round(live.volume));
-    }
+    applyRoom();
   }
 
   // Start fetching YouTube's player straight away so the first trailer is quick.
@@ -278,10 +308,7 @@ export function createTrailers(frameEl, list, { onShow, onFail } = {}) {
     const next = Math.round(value * 50) / 50;
     if (next === master) return;
     master = next;
-    if (live && !muted && !live.ramping && typeof live.player.setVolume === 'function') {
-      live.volume = loud();
-      live.player.setVolume(Math.round(live.volume));
-    }
+    applyRoom();
   }
 
   /** Cut to this film as soon as it's ready (a card picked in the programme). */
@@ -293,20 +320,4 @@ export function createTrailers(frameEl, list, { onShow, onFail } = {}) {
   }
 
   return { play, stop, setMuted, setDistance, setMaster, jump };
-}
-
-/** Smoothly move a player's volume from one level to another. A newer fade on the same player wins. */
-function rampVolume(slot, from, to, ms) {
-  const token = (slot.rampToken = (slot.rampToken || 0) + 1);
-  const t0 = performance.now();
-  slot.ramping = true;
-  const step = () => {
-    if (slot.rampToken !== token || typeof slot.player?.setVolume !== 'function') return;
-    const k = Math.min(1, (performance.now() - t0) / ms);
-    slot.volume = from + (to - from) * k * k * (3 - 2 * k);
-    slot.player.setVolume(Math.round(slot.volume));
-    if (k < 1) setTimeout(step, 40);
-    else slot.ramping = false;
-  };
-  step();
 }

@@ -14,19 +14,24 @@
   <body>
     <canvas id="scene" aria-hidden="true"></canvas>
 
-    <!-- Gives the page something to scroll; scroll position drives the camera. -->
-    <div class="scroll-space" aria-hidden="true"></div>
+    <!-- Gives the page something to scroll; scroll position drives the camera (over the first part), then a
+         moment in your seat before the programme wall comes up. -->
+    <div class="scroll-space" aria-hidden="true"><div class="scroll-zoom" id="scroll-zoom"></div></div>
 
     <!-- This week's programme: a wall that rises over the cinema; scrolling on slides the film cards along. -->
     <section class="wall" id="wall" aria-labelledby="wall-title">
       <div class="wall-pin">
         <header class="wall-head">
           <p class="wall-kicker">This week</p>
-          <h2 class="wall-title" id="wall-title">Now Showing</h2>
+          <h2 class="wall-title" id="wall-title">Programme</h2>
           <p class="wall-dates" id="wall-dates"></p>
         </header>
         <ol class="wall-track" id="wall-track"></ol>
-        <div class="wall-progress" aria-hidden="true"><span id="wall-progress"></span></div>
+        <footer class="wall-foot" aria-hidden="true">
+          <span class="wall-count"><b id="wall-count">01</b> / <span id="wall-total">12</span></span>
+          <div class="wall-progress"><span id="wall-progress"></span></div>
+          <span class="wall-hint" id="wall-hint"><span>Scroll to browse</span><i></i></span>
+        </footer>
       </div>
     </section>
 
@@ -37,7 +42,7 @@
     <div class="vignette" id="vignette" aria-hidden="true"></div>
 
     <div class="now-showing is-swapping" id="now-showing" aria-live="polite">
-      <span class="now-label">Now showing</span>
+      <span class="now-label" id="now-label">Now showing</span>
       <span class="now-title" id="now-title"></span>
       <span class="now-note" id="now-note"></span>
     </div>

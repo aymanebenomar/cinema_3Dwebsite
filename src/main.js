@@ -1,4 +1,6 @@
+import 'lenis/dist/lenis.css';
 import './style.css';
+import Lenis from 'lenis';
 import * as THREE from 'three';
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { createCinema, SCREEN, BALCONY_EYE, BALCONY_LOOK } from './cinema.js';
@@ -12,8 +14,9 @@ import { createProgramme } from './programme.js';
 const START_FOV = 50; // camera lens while the film is fullscreen
 const SEAT_FOV = 58; // camera lens once you're up in the balcony
 const MIN_SEAT_HFOV = 60; // on narrow (phone) screens, widen the lens so the whole screen still fits
-const ZOOM_SMOOTH = 0.75; // the pull-back is one smooth move of about two and a half seconds
-const LOOK_SMOOTH = 0.7; // same, for mouse look
+const ZOOM_SMOOTH = 0.22; // the camera trails the scroll by a touch, so it moves with weight
+const BACK_TO_SEAT = 2; // seconds: picking a film glides you back down to your seat
+const LOOK_SMOOTH = 0.7; // mouse look eases like a head turning
 const CRANE_HEIGHT = 0.5; // a gentle extra lift mid-move, in metres, like a crane shot
 
 /* ---------- Renderers ---------- */
@@ -69,6 +72,7 @@ const ui = {
   nowNote: document.getElementById('now-note'),
   vignette: document.getElementById('vignette'),
   hintProgramme: document.getElementById('hint-programme'),
+  nowLabel: document.getElementById('now-label'),
 };
 
 const startClip = Number.parseInt(new URLSearchParams(location.search).get('clip') ?? '0', 10) || 0;
@@ -94,10 +98,12 @@ const cinema = createCinema(scene, projector.material);
 // The programme: the famous films, 10 seconds each, round and round. Until the first one is ready the screen
 // stays dark, like a real cinema before the show. If YouTube can't load at all, the reel plays instead.
 let trailerFailures = 0;
+let showingIndex = -1; // which of TRAILERS is on screen
 const trailers = TRAILERS.length
   ? createTrailers(frameEl, TRAILERS, {
-      onShow: (film) => {
+      onShow: (film, index) => {
         trailerFailures = 0;
+        showingIndex = index;
         ui.loading.classList.add('is-done');
         projector.setVisible(0); // the screen becomes a window onto the film
         projector.setGlow(film.light);
@@ -121,11 +127,16 @@ function startReel() {
 if (trailers) trailers.play();
 else startReel();
 
-// This week's programme, on the wall that rises over the cinema. Picking a film takes you back to watch it.
+// This week's programme, on the wall that rises over the cinema. Picking a film takes you back to your seat
+// to watch it: it comes on as soon as it's ready.
 const programme = createProgramme({
   onSelect: (index) => {
-    trailers?.jump(index);
-    window.scrollTo({ top: Math.round(window.innerHeight * 0.3), behavior: 'smooth' });
+    if (trailers && index !== showingIndex) {
+      trailers.jump(index);
+      showTitle(TRAILERS[index], 'Up next');
+    }
+    programme.leave();
+    glideTo(programme.stops().seat, BACK_TO_SEAT);
   },
 });
 
@@ -145,30 +156,40 @@ ui.sound.addEventListener('click', () => {
 });
 
 let titleTimer = 0;
-function showTitle(clip) {
+function showTitle(clip, label = 'Now showing') {
   ui.now.classList.add('is-swapping');
   clearTimeout(titleTimer);
   titleTimer = setTimeout(() => {
+    ui.nowLabel.textContent = label;
     ui.nowTitle.textContent = clip.year ? `${clip.title} (${clip.year})` : clip.title;
     ui.nowNote.textContent = clip.credit ?? '';
     ui.now.classList.remove('is-swapping');
   }, 380);
 }
 
-/* ---------- Scroll + pointer ---------- */
+/* ---------- Scrolling ---------- */
 
 // Always begin fullscreen, even after a reload halfway down the page.
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 window.scrollTo(0, 0);
 
-let zoomTarget = 0; // 0 = the film fullscreen, 1 = up in the balcony
-function readScroll() {
-  // A little scroll is enough: scrolling down from the top plays the whole move out, back to the top plays it in.
-  if (window.scrollY > 24) zoomTarget = 1;
-  else if (window.scrollY < 4) zoomTarget = 0;
+// Smooth, weighted scrolling, the same with a mouse wheel, a trackpad or a finger.
+const lenis = new Lenis({ lerp: 0.065, wheelMultiplier: 0.85, touchMultiplier: 1.4, syncTouch: true, syncTouchLerp: 0.065 });
+
+// Everything follows the scroll, in order and never overlapping: first the camera pulls back from the film to your
+// seat, then you sit for a moment, then the programme wall rises, then the cards slide along it. A little scroll
+// moves things a little; scroll back and it all plays in reverse.
+const zoomSpace = document.getElementById('scroll-zoom'); // its height is how far you scroll for the camera move
+let zoomLength = zoomSpace.offsetHeight;
+
+const glideEase = (t) => 0.5 - Math.cos(Math.PI * t) / 2; // eases in, eases out
+let glideEnds = 0; // when a glide in progress is over, in performance.now() ms (0 = none)
+
+/** Scroll smoothly to `y` by itself (the wheel waits until it's there). */
+function glideTo(y, seconds) {
+  glideEnds = performance.now() + seconds * 1000 + 500; // the extra half second covers an interrupted glide
+  lenis.scrollTo(y, { duration: seconds, easing: glideEase, lock: true, force: true, onComplete: () => (glideEnds = 0) });
 }
-addEventListener('scroll', readScroll, { passive: true });
-readScroll();
 
 const pointerTarget = new THREE.Vector2();
 addEventListener('pointermove', (e) => {
@@ -181,7 +202,21 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   renderer.setSize(innerWidth, innerHeight, false);
   cssRenderer.setSize(innerWidth, innerHeight);
-  readScroll();
+
+  // Stay where you were (in your seat, or at the same card) when the window changes size.
+  const before = programme.stops();
+  const y = lenis.scroll;
+  programme.layout();
+  zoomLength = zoomSpace.offsetHeight;
+  lenis.resize();
+  const after = programme.stops();
+  let target = null;
+  if (y < 1) target = 0;
+  else if (before.top > before.seat + 1 && y >= before.top - 1) {
+    const along = before.end > before.top ? (y - before.top) / (before.end - before.top) : 0;
+    target = after.top + along * (after.end - after.top);
+  } else if (Math.abs(y - before.seat) < 2) target = after.seat;
+  if (target !== null && !glideEnds && Math.abs(target - y) > 1) lenis.scrollTo(target, { immediate: true, force: true });
 });
 
 /* ---------- Motion helpers ---------- */
@@ -192,6 +227,16 @@ const smoothstep = (a, b, v) => {
   const t = clamp01((v - a) / (b - a));
   return t * t * (3 - 2 * t);
 };
+
+/** Write a style only when its value changes, so a still page costs the browser nothing. */
+const written = new WeakMap();
+function setStyle(el, prop, value) {
+  let props = written.get(el);
+  if (!props) written.set(el, (props = {}));
+  if (props[prop] === value) return;
+  props[prop] = value;
+  el.style.setProperty(prop, value);
+}
 
 /** Critically damped spring: eases in and out of every change and never overshoots. */
 function spring(state, target, smoothTime, dt) {
@@ -232,17 +277,21 @@ let last = performance.now();
 let perfTime = 0;
 let perfFrames = 0;
 let perfGrace = 4; // seconds to ignore while everything loads
+let drawnOnce = false;
 
 renderer.setAnimationLoop((now) => {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
   const time = now / 1000;
 
-  const p = spring(progress, zoomTarget, ZOOM_SMOOTH, dt);
+  lenis.raf(now);
+  if (glideEnds && now > glideEnds) glideEnds = 0;
+  const y = lenis.scroll;
+  const p = spring(progress, clamp01(y / Math.max(1, zoomLength)), ZOOM_SMOOTH, dt);
   const px = spring(lookX, pointerTarget.x, LOOK_SMOOTH, dt);
   const py = spring(lookY, pointerTarget.y, LOOK_SMOOTH, dt);
 
-  const e = p; // the spring already starts gently and settles softly
+  const e = p * p * (3 - 2 * p); // the move starts gently and settles softly, however fast you scroll
 
   const fullscreenZ = SCREEN.z + coverDistance(START_FOV, camera.aspect);
   camera.position.set(
@@ -257,20 +306,26 @@ renderer.setAnimationLoop((now) => {
   camera.lookAt(lookAt);
 
   projector.update(dt);
-  const cover = programme.update(dt); // how much of the cinema the programme wall hides
-  document.documentElement.style.setProperty('--cover', cover.toFixed(3));
+  const cover = programme.update(y); // how much the programme has taken over from the cinema
+  // The cinema's own captions and sound button bow out as it does. (Set on those two only: a value set on
+  // the whole page every frame would make the browser restyle everything, every frame.)
+  setStyle(ui.now, '--cover', cover.toFixed(3));
+  setStyle(ui.sound, '--cover', cover.toFixed(3));
   cinema.update({ glow: projector.glow });
 
-  ui.hint.style.opacity = String(1 - smoothstep(0, 0.06, p));
-  ui.vignette.style.opacity = String(e);
+  setStyle(ui.hint, 'opacity', (1 - smoothstep(0, 0.06, p)).toFixed(3));
+  setStyle(ui.vignette, 'opacity', e.toFixed(3));
   projector.setRoom(e); // the further back you are, the more of the hall you hear
   trailers?.setDistance(e);
-  projector.setMaster(1 - cover); // and as the wall rises, the sound fades away
+  projector.setMaster(1 - cover); // and as the programme comes in, the sound fades away
   trailers?.setMaster(1 - cover);
-  ui.hintProgramme.style.opacity = String(smoothstep(0.92, 1, e) * (1 - smoothstep(0, 0.12, cover)));
+  setStyle(ui.hintProgramme, 'opacity', (smoothstep(0.92, 1, e) * (1 - smoothstep(0, 0.12, cover))).toFixed(3));
 
-  // Once the wall hides the cinema completely, stop drawing it (saves the battery); it resumes on the way back.
-  if (cover < 0.999) {
+  // Once the programme has all but covered the cinema, stop drawing the room: what still shows through is a
+  // still frame (the film itself keeps playing), and the tickets get the computer's full power for their entrance.
+  // It resumes on the way back. (It's always drawn at least once: that's also what puts the film players on the page.)
+  if (cover < 0.9 || !drawnOnce) {
+    drawnOnce = true;
     renderer.render(scene, camera);
     cssRenderer.render(cssScene, camera);
   }

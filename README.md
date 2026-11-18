@@ -1,8 +1,15 @@
 # Cinema 3D website
 
-A film plays fullscreen. Scroll a little and the camera pulls back and rises: the film becomes the screen of
-a 3D cinema, and you end up high on the balcony looking over a curved, C-shaped auditorium while the reel
-keeps playing, 10 seconds of each film, crossfading from one to the next.
+A film plays fullscreen. Scroll and the camera pulls back and rises: the film becomes the screen of a 3D
+cinema, and you end up high on the balcony looking over a curved, C-shaped auditorium while the films keep
+playing, 10 seconds each, crossfading from one to the next.
+
+Scroll on and the cinema dissolves into the week's programme while the sound fades away. The title and
+the film tickets arrive from the left (the first one spins in), and scrolling slides the tickets along: each is
+the film's poster with the day and time it plays. Click one to go back to your seat and watch it.
+
+Everything follows the scroll, in order: the camera move, a moment in your seat, the dissolve, then the tickets.
+Scrolling is smoothed with [Lenis](https://github.com/darkroomengineering/lenis).
 
 Built with [three.js](https://threejs.org) and [Vite](https://vite.dev).
 
@@ -27,7 +34,16 @@ embedded player (the legal way to show this footage without owning it), so they 
 - The room is lit in each film's colours; the house lights stay at a low glow, as in a real cinema.
 
 Edit the list (`TRAILERS`) in `src/clips.js`: each entry is a YouTube video id, the second to start at,
-and the colours the film throws onto the room.
+the colours the film throws onto the room, and for the programme its running time, genres and poster.
+
+## The programme
+
+The tickets show the films' official posters, loaded from The Movie Database (TMDB) rather than stored here.
+A film's `poster` in `src/clips.js` is the file name from its TMDB image address
+(`https://image.tmdb.org/t/p/w500/<poster>.jpg`). If a poster can't load, a still from the film's video stands in.
+
+The showtimes are the next twelve shows from now, one per film in list order, at the times in `SHOWS` in
+`src/programme.js` (two a day, one on Mondays and Tuesdays).
 
 ## Sound
 
@@ -67,9 +83,11 @@ setting `STREAM_WITHOUT_REEL = true` in `src/clips.js`, but it's slower to start
 
 | File | What it does |
 | --- | --- |
-| `src/main.js` | Renderer, scroll → camera move (spring-smoothed), mouse look. Tunables at the top. |
-| `src/cinema.js` | The room: curved stadium rows and seats, balcony, screen, curtains, lights and shadows. |
+| `src/main.js` | Renderer, smooth scrolling, scroll → camera move, mouse look. Tunables at the top. |
+| `src/cinema.js` | The room: curved stadium rows and seats, balcony, screen, lights and shadows. |
+| `src/trailers.js` | Plays the famous films through YouTube's player, with the sound fades around each cut. |
+| `src/programme.js` | The programme wall: the tickets, the showtimes and the poster glow behind them. |
 | `src/projector.js` | Plays the reel (or streams films) onto the screen and lights the room with its colours. |
-| `src/clips.js` | Finds the built reel; lists the streaming fallback. |
+| `src/clips.js` | The films (YouTube id, poster, colours…); finds the built reel. |
 | `scripts/build-reel.mjs` | Builds the reel. |
-| `src/style.css` | Overlay UI. `--scroll-length` sets how much scrolling the move takes. |
+| `src/style.css` | Overlay UI, the wall and the tickets. `--zoom-length` and `--hold-length` set how much scrolling the camera move and the pause in your seat take. |
